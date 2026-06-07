@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+
+# Production builds
+/build
+/dist
+frontend/build/
+frontend/dist/
+
+# Environment Variables & Secrets (Crucial)
+.env
+.env.local
+.env.production
+backend/.env
+frontend/.env
+
+# BigQuery Service Account & Credentials
+bigquery_service_account.json
+backend/bigquery_service_account.json
+*.js.map
+
+# Project Configuration Files (Explicitly Kept)
+!package.json
+!package-lock.json
+!tsconfig.json
+!requirements.txt
+!railway.json
+!backend/railway.json
+!Procfile
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Editor/System files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
