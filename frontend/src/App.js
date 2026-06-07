@@ -157,6 +157,8 @@ export default function App() {
                     yKey="cash_sales"
                     label="Cash Sales"
                     yType="cur"
+                    secondaryKey="daily_need"
+                    secondaryLabel="Daily Need"
                   />
                 </div>
               </div>
@@ -190,8 +192,10 @@ export default function App() {
                     data={dash.mtdSummary}
                     xKey="location"
                     yKey="cash_sales"
-                    label="Cash Sales"
+                    label="MTD Sales"
                     yType="cur"
+                    secondaryKey="monthly_budget"
+                    secondaryLabel="Budget"
                   />
                 </div>
               </div>
