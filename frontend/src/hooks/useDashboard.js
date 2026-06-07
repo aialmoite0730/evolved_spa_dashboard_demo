@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
+const API = process.env.REACT_APP_API_URL || "http://localhost:8000" || "https://evolvedspadashboarddemo-production.up.railway.app";
 
 function today()      { return new Date().toISOString().slice(0, 10); }
 function monthStart() {
