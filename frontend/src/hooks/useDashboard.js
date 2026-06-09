@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
-function today()     { return new Date().toISOString().slice(0, 10); }
+function today() { return new Date().toISOString().slice(0, 10); }
 function yesterday() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
@@ -11,6 +11,13 @@ function yesterday() {
 function monthStart() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+// Returns dateStr minus 1 day (used to find last completed day in month view)
+function dateMinus1(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
 function qs(obj) {
@@ -76,7 +83,13 @@ export function useDashboard() {
     const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
     const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
 
-    const dateQ = qs({ date: effectiveEnd, ...locArg });
+    // Daily endpoints always query the last completed day:
+    //   - Day view:   the selected dayDate
+    //   - Month view: endDate - 1, because endDate (e.g. May 31 = today)
+    //                 has no data yet, so we show the prior closed day instead.
+    const dailyDate = viewMode === "day" ? effectiveEnd : dateMinus1(effectiveEnd);
+
+    const dateQ = qs({ date: dailyDate, ...locArg });
     const mtdQ  = qs({ start_date: effectiveStart, end_date: effectiveEnd, ...locArg });
 
     try {
@@ -145,9 +158,13 @@ export function useDashboard() {
   const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
   const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
 
+  // The actual date used for daily-kpis / daily-sales-mix — shown in the
+  // "Prior Day KPIs" section header so the label matches the data.
+  const effectiveDailyDate = viewMode === "day" ? filters.dayDate : dateMinus1(filters.endDate);
+
   return {
     viewMode, setViewMode,
-    filters, effectiveStart, effectiveEnd,
+    filters, effectiveStart, effectiveEnd, effectiveDailyDate,
     locations,
     kpiHeader,
     dailyKpis, dailyMix,

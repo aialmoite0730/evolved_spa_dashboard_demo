@@ -216,7 +216,7 @@ export default function App() {
 
             <div className="sec-hdr">
               {isDay ? "KPIs" : "Prior Day KPIs"}
-              <span className="sec-sub">{fmtDateLong(dash.effectiveEnd)}</span>
+              <span className="sec-sub">{fmtDateLong(dash.effectiveDailyDate)}</span>
             </div>
             <DailyKPITable data={dash.dailyKpis} />
 

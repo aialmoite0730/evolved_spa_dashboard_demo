@@ -126,24 +126,26 @@ def get_mtd_kpi_header(
             {where}
         ),
         yesterday_data AS (
+            -- guaranteed one row: SUM/COUNT on empty set returns NULL/0, never zero rows
             SELECT
-                SUM(sales_exc_tax)       AS yesterday_revenue,
-                COUNT(DISTINCT guest_id) AS yesterday_clients
+                COALESCE(SUM(sales_exc_tax), 0)       AS yesterday_revenue,
+                COALESCE(COUNT(DISTINCT guest_id), 0) AS yesterday_clients
             FROM {FULL_SALES}
             WHERE DATE(sale_date) = @yesterday
             {y_loc}
         ),
         last_month_data AS (
-            -- Full prior calendar month (e.g. end_date in June → all of May)
+            -- guaranteed one row
             SELECT
-                SUM(sales_exc_tax)       AS last_month_revenue,
-                COUNT(DISTINCT guest_id) AS last_month_clients
+                COALESCE(SUM(sales_exc_tax), 0)       AS last_month_revenue,
+                COALESCE(COUNT(DISTINCT guest_id), 0) AS last_month_clients
             FROM {FULL_SALES}
             WHERE DATE(sale_date) BETWEEN @lm_start AND @lm_end
             {y_loc}
         ),
         prior_year AS (
-            SELECT SUM(sales_exc_tax) AS py_revenue
+            -- guaranteed one row
+            SELECT COALESCE(SUM(sales_exc_tax), 0) AS py_revenue
             FROM {FULL_SALES}
             {py_where}
         ),
@@ -156,6 +158,8 @@ def get_mtd_kpi_header(
             GROUP BY job_name
         ),
         provider_rev AS (
+            -- LEFT JOIN guarantees one aggregate row even when no schedule rows match
+            -- (e.g. end_date is today and sales data for today doesn't exist yet)
             SELECT
                 SAFE_DIVIDE(
                     SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN sa.sales_exc_tax ELSE 0 END),
@@ -166,13 +170,14 @@ def get_mtd_kpi_header(
                     NULLIF(SUM(CASE WHEN es.job_name = 'Esthetician' THEN es.booked_hours ELSE 0 END), 0)
                 ) AS rev_per_esthetician_hr
             FROM {FULL_SALES} sa
-            JOIN {FULL_SCHEDULE} es
+            LEFT JOIN {FULL_SCHEDULE} es
               ON sa.serviced_by = es.employee_name
              AND DATE(sa.sale_date) = DATE(es.date)
              AND sa.center_name = es.center_name
             {join_where}
         ),
         rebooking AS (
+            -- guaranteed one row
             SELECT
                 SAFE_DIVIDE(COUNTIF(rebooked = true), NULLIF(COUNT(*), 0)) * 100 AS rebooking_rate
             FROM {FULL_APPT}
