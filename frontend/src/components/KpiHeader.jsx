@@ -26,7 +26,7 @@ function Tile({ label, val, sub, subClass, tileClass, placeholder }) {
   );
 }
 
-export default function KpiHeader({ data }) {
+export default function KpiHeader({ data, viewMode = "month" }) {
   if (!data) {
     return (
       <div className="tiles">
@@ -39,29 +39,70 @@ export default function KpiHeader({ data }) {
     );
   }
 
-  // Compute trending = avg_daily * days in month
-  const now = new Date();
+  // ── Trending ──────────────────────────────────────────────────────────────
+  const now         = new Date();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const trending = data.avg_daily_revenue
+  const trending    = data.avg_daily_revenue
     ? Number(data.avg_daily_revenue) * daysInMonth
     : null;
 
-  const yoyN    = Number(data.same_store_yoy);
-  const yoyGood = !isNaN(yoyN) && yoyN >= 0;
   const trendingN = Number(trending);
   const budgetN   = Number(data.monthly_budget);
-  const varToGoal = (!isNaN(trendingN) && !isNaN(budgetN) && data.monthly_budget)
-    ? trendingN - budgetN : null;
+  const mtdN      = Number(data.mtd_revenue);
+  const pyN       = Number(data.py_revenue);
 
-  const pctTrending = (!isNaN(trendingN) && !isNaN(budgetN) && budgetN)
-    ? (trendingN / budgetN * 100) : null;
+  const hasBudget = !isNaN(budgetN) && data.monthly_budget;
+  const hasPY     = !isNaN(pyN) && data.py_revenue;
 
-  // MTD vs budget
-  const mtdN  = Number(data.mtd_revenue);
-  const mtdPct = (!isNaN(mtdN) && !isNaN(budgetN) && budgetN)
-    ? (mtdN / budgetN * 100) : null;
+  // ── MTD vs budget ─────────────────────────────────────────────────────────
+  const mtdPct = hasBudget ? (mtdN / budgetN * 100) : null;
   const mtdBad = mtdPct != null && mtdPct < 90;
 
+  // ── Trending tile sub-label ───────────────────────────────────────────────
+  // Reference: "-$204,574 vs goal · 89.5%"
+  const pctTrending = hasBudget && !isNaN(trendingN) && budgetN
+    ? (trendingN / budgetN * 100) : null;
+  const trendingVar = hasBudget ? trendingN - budgetN : null;
+  const trendingSub = trendingVar != null
+    ? `${trendingVar >= 0 ? "+" : ""}${fmtCur(trendingVar)} vs goal · ${fmtPct(pctTrending, 1)}`
+    : "full-month projection";
+
+  // ── Var. to Goal ──────────────────────────────────────────────────────────
+  // Primary:  trending - budget  → "-$204,574"
+  // Fallback: mtd - py           → always shows something
+  const varToGoal = hasBudget
+    ? trendingN - budgetN
+    : hasPY ? mtdN - pyN : null;
+
+  // Reference sub: "-10.5% · trending shortfall"
+  const varPct = hasBudget && pctTrending != null
+    ? pctTrending - 100
+    : hasPY && pyN ? ((mtdN - pyN) / pyN * 100) : null;
+  const varSub = varPct != null
+    ? `${sign(varPct)}${Math.abs(varPct).toFixed(1)}% · ${varToGoal >= 0 ? "trending surplus" : "trending shortfall"}`
+    : undefined;
+
+  // ── Same-Store YoY ────────────────────────────────────────────────────────
+  // Backend sends same_store_yoy; fallback compute if null
+  const yoyN = data.same_store_yoy != null
+    ? Number(data.same_store_yoy)
+    : hasPY && mtdN ? ((mtdN - pyN) / pyN * 100) : null;
+  const yoyGood = yoyN != null && !isNaN(yoyN) && yoyN >= 0;
+
+  // Reference sub: "+$365K vs prior year · 14 locations"
+  const yoyAbsVar = hasPY ? mtdN - pyN : null;
+  const yoySub = yoyAbsVar != null
+    ? `${sign(yoyAbsVar)}${fmtCur(yoyAbsVar)} vs prior year`
+    : hasPY ? `vs ${fmtCur(pyN)} PY` : undefined;
+
+  // ── Yesterday Revenue ─────────────────────────────────────────────────────
+  // Reference sub: "-$16,663 vs prior day ($85,775)"
+  // We don't have prior-prior-day yet so fall back to client count
+  const yestSub = data.yesterday_clients != null
+    ? `${fmtNum(data.yesterday_clients)} clients`
+    : undefined;
+
+  // ── Utilization / Rev/Hr / GM ─────────────────────────────────────────────
   const provUtil = Number(data.provider_utilization);
   const estiUtil = Number(data.esthetician_utilization);
   const provRev  = Number(data.rev_per_provider);
@@ -76,38 +117,42 @@ export default function KpiHeader({ data }) {
           label="MTD Revenue"
           val={fmtCur(data.mtd_revenue)}
           sub={mtdPct != null
-            ? `${sign(mtdPct - 100)}${(mtdPct - 100).toFixed(1)}% vs budget`
-            : data.py_revenue ? `vs ${fmtCur(data.py_revenue)} PY` : undefined}
+            ? `${sign(mtdPct - 100)}${(mtdPct - 100).toFixed(1)}% vs ${fmtCur(budgetN)} budget`
+            : hasPY ? `vs ${fmtCur(pyN)} PY` : undefined}
           subClass={mtdBad ? "neg" : undefined}
           tileClass={mtdBad ? "bad" : undefined}
         />
         <Tile
           label="Trending"
           val={fmtCur(trending)}
-          sub={pctTrending != null
-            ? `${sign(pctTrending - 100)}${(pctTrending - 100).toFixed(1)}% vs goal · ${fmtPct(pctTrending, 1)}`
-            : "full-month projection"}
+          sub={trendingSub}
           subClass={pctTrending != null && pctTrending < 100 ? "neg" : undefined}
           tileClass={pctTrending != null && pctTrending < 90 ? "bad" : undefined}
         />
         <Tile
           label="Var. to Goal"
-          val={varToGoal != null ? (varToGoal < 0 ? `(${fmtCur(Math.abs(varToGoal))})` : fmtCur(varToGoal)) : "—"}
-          sub={pctTrending != null ? `${fmtPct(pctTrending, 1)} · trending` : undefined}
+          val={varToGoal != null
+            ? (varToGoal < 0 ? `(${fmtCur(Math.abs(varToGoal))})` : fmtCur(varToGoal))
+            : "—"}
+          sub={varSub}
           subClass={varToGoal != null && varToGoal < 0 ? "neg" : "pos"}
           tileClass={varToGoal != null && varToGoal < 0 ? "bad" : undefined}
         />
         <Tile
           label="Same-Store YoY"
-          val={data.same_store_yoy != null ? `${sign(yoyN)}${fmtPct(data.same_store_yoy)}` : "—"}
-          sub={data.py_revenue ? `vs ${fmtCur(data.py_revenue)} PY` : undefined}
+          val={yoyN != null && !isNaN(yoyN) ? `${sign(yoyN)}${fmtPct(yoyN)}` : "—"}
+          sub={yoySub}
           subClass={yoyGood ? "pos" : "neg"}
           tileClass={yoyGood ? "good" : "bad"}
         />
         <Tile
-          label="Yesterday Revenue"
-          val={fmtCur(data.yesterday_revenue)}
-          sub={data.yesterday_clients != null ? `${fmtNum(data.yesterday_clients)} clients` : undefined}
+          label={viewMode === "month" ? "Last Month Revenue" : "Yesterday Revenue"}
+          val={viewMode === "month"
+            ? fmtCur(data.last_month_revenue)
+            : fmtCur(data.yesterday_revenue)}
+          sub={viewMode === "month"
+            ? (data.last_month_clients != null ? `${fmtNum(data.last_month_clients)} clients` : undefined)
+            : yestSub}
         />
         <Tile
           label="Total Customer Count"
@@ -126,8 +171,8 @@ export default function KpiHeader({ data }) {
           val={fmtNum(data.existing_client_count)}
           sub="MTD returning"
         />
-        <Tile label="MTD Ad Spend"    val="—" sub="connect ad platform" placeholder />
-        <Tile label="Blended CAC"     val="—" sub="ad spend ÷ new clients" placeholder />
+        <Tile label="MTD Ad Spend" val="—" sub="connect ad platform" placeholder />
+        <Tile label="Blended CAC"  val="—" sub="ad spend ÷ new clients" placeholder />
       </div>
 
       {/* ── Row 2: Performance & Engagement ── */}

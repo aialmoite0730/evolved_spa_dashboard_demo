@@ -1,8 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API = process.env.REACT_APP_API_URL || "http://localhost:8000" ;
+const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
-function today()      { return new Date().toISOString().slice(0, 10); }
+function today()     { return new Date().toISOString().slice(0, 10); }
+function yesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 function monthStart() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
@@ -24,9 +29,16 @@ async function fetchJSON(path) {
 }
 
 export function useDashboard() {
+  // viewMode: "day" | "month"
+  const [viewMode, setViewMode] = useState("month");
+
   const [filters, setFilters] = useState({
+    // Month view
     startDate: monthStart(),
     endDate:   today(),
+    // Day view
+    dayDate:   yesterday(),
+    // Shared
     locations: [],
   });
 
@@ -40,14 +52,12 @@ export function useDashboard() {
   const [operations,        setOperations]        = useState([]);
   const [revenueTrend,      setRevenueTrend]      = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
-  // Employee-level data (from schedule + sales join)
   const [employeeUtil,      setEmployeeUtil]      = useState([]);
   const [employeeRph,       setEmployeeRph]       = useState([]);
   const [employeeScorecard, setEmployeeScorecard] = useState([]);
   const [loading,           setLoading]           = useState(false);
   const [error,             setError]             = useState(null);
 
-  // Load location list once
   useEffect(() => {
     fetchJSON("/api/locations")
       .then(setLocations)
@@ -61,8 +71,13 @@ export function useDashboard() {
     const loc    = filters.locations.length ? filters.locations : undefined;
     const locArg = loc ? { locations: loc } : {};
 
-    const dateQ = qs({ date: filters.endDate, ...locArg });
-    const mtdQ  = qs({ start_date: filters.startDate, end_date: filters.endDate, ...locArg });
+    // In day view, use dayDate as both start and end so all endpoints
+    // treat it as a single-day range — no special backend changes needed.
+    const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
+    const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
+
+    const dateQ = qs({ date: effectiveEnd, ...locArg });
+    const mtdQ  = qs({ start_date: effectiveStart, end_date: effectiveEnd, ...locArg });
 
     try {
       const [
@@ -102,12 +117,19 @@ export function useDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, viewMode]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   function updateFilter(key, val) {
-    setFilters(f => ({ ...f, [key]: val }));
+    setFilters(f => {
+      if (key === "startDate") {
+        // Prevent MTD To from going earlier than MTD From
+        const newEndDate = val > f.endDate ? val : f.endDate;
+        return { ...f, startDate: val, endDate: newEndDate };
+      }
+      return { ...f, [key]: val };
+    });
   }
 
   function toggleLocation(loc) {
@@ -119,8 +141,14 @@ export function useDashboard() {
     });
   }
 
+  // Expose effective dates so App.js labels always reflect what was queried
+  const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
+  const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
+
   return {
-    filters, locations,
+    viewMode, setViewMode,
+    filters, effectiveStart, effectiveEnd,
+    locations,
     kpiHeader,
     dailyKpis, dailyMix,
     mtdSummary, mtdMix,

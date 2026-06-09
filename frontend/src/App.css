@@ -474,3 +474,42 @@ RESPONSIVE
 @media (max-width: 600px) {
   .sc-grid { grid-template-columns: 1fr; }
 }
+/* ── Day / Month view toggle — matches ev-input topbar style ───────────────── */
+.view-toggle {
+  display: flex;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 0;
+  overflow: hidden;
+  height: 28px;
+  background: rgba(255,255,255,0.08);
+}
+
+.view-toggle-btn {
+  padding: 0 14px;
+  height: 100%;
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 11.5px;
+  font-weight: 300;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: transparent;
+  border: none;
+  border-right: 1px solid rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.45);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.view-toggle-btn:last-child {
+  border-right: none;
+}
+
+.view-toggle-btn.active {
+  background: #A37B88;
+  color: #fff;
+}
+
+.view-toggle-btn:hover:not(.active) {
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.8);
+}
