@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import triggers config.py → credential setup + BQ client init
 import config  # noqa: F401  (side-effect import)
 
-from routers import locations, daily, mtd, operations, employees, charts
+from routers import locations, daily, mtd, operations, employees, charts, appointments
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -53,7 +53,8 @@ app.include_router(daily.router,     tags=["Daily KPIs"])
 app.include_router(mtd.router,       tags=["MTD Performance"])
 app.include_router(operations.router,tags=["Operations"])
 app.include_router(employees.router, tags=["Employees"])
-app.include_router(charts.router,    tags=["Charts"])
+app.include_router(charts.router,       tags=["Charts"])
+app.include_router(appointments.router, tags=["Appointments"])
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"])

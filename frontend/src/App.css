@@ -513,3 +513,126 @@ RESPONSIVE
   background: rgba(255,255,255,0.12);
   color: rgba(255,255,255,0.8);
 }
+
+/* ── AI Insights ───────────────────────────────────────────────────────────── */
+.ai-insights-wrap {
+  margin: 0 0 16px 0;
+}
+
+.ai-insights-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: 30px;
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 300;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: transparent;
+  border: 1px solid #A37B88;
+  color: #A37B88;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.ai-insights-btn:hover:not(:disabled) {
+  background: #A37B88;
+  color: #fff;
+}
+.ai-insights-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ai-insights-panel {
+  margin-top: 8px;
+  border: 1px solid #E8E7E4;
+  border-left: 3px solid #A37B88;
+  background: #fdfcfc;
+  border-radius: 0 3px 3px 0;
+  overflow: hidden;
+}
+
+.ai-insights-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #E8E7E4;
+  background: #f9f7f7;
+}
+
+.ai-insights-title {
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #A37B88;
+}
+
+.ai-insights-meta {
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 9px;
+  font-weight: 300;
+  letter-spacing: 0.1em;
+  color: #aaa;
+  margin-left: 4px;
+}
+
+.ai-insights-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  font-size: 11px;
+  color: #aaa;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.ai-insights-close:hover { color: #2E2E2E; }
+
+.ai-insights-body {
+  padding: 14px 16px;
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.7;
+  color: #2E2E2E;
+  letter-spacing: 0.02em;
+}
+.ai-insights-body p {
+  margin: 0 0 8px;
+}
+.ai-insights-body p:last-child { margin-bottom: 0; }
+
+.ai-insights-loading {
+  padding: 14px 16px;
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 300;
+  color: #A37B88;
+  letter-spacing: 0.1em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+  font-size: 8px;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.2; }
+  50%       { opacity: 1;   }
+}
+
+.ai-insights-error {
+  padding: 12px 16px;
+  font-family: 'Josefin Sans', sans-serif;
+  font-size: 11px;
+  color: #7f1d1d;
+  background: #fff5f5;
+}

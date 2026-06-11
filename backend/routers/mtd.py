@@ -207,7 +207,8 @@ def get_mtd_kpi_header(
             pv.rev_per_provider_hr    AS rev_per_provider,
             pv.rev_per_esthetician_hr AS rev_per_esthetician,
             ROUND((1 - 0.20 - 0.22 * 1.12) * 100, 1)                                            AS gross_margin_pct,
-            CAST(NULL AS NUMERIC)                                                                  AS monthly_budget,
+            -- Sum of all location monthly budgets
+            1950000.0                                                                               AS monthly_budget,
             rb.rebooking_rate
         FROM mtd m
         CROSS JOIN yesterday_data  y
@@ -281,8 +282,29 @@ def get_mtd_summary(
 
         all_params = merge_params(params, pw_x, pm_x, py_x)
 
+        # Days elapsed so far this month (for pro-rated budget)
+        days_elapsed = (end_dt - end_dt.replace(day=1)).days + 1
+
         sql = f"""
-        WITH current_period AS (
+        WITH budget_lookup AS (
+            SELECT location, monthly_budget FROM UNNEST([
+                STRUCT('Bel Air, MD'      AS location, 167500.0 AS monthly_budget),
+                STRUCT('Bridgewater, NJ'  AS location,  50000.0 AS monthly_budget),
+                STRUCT('Denville, NJ'     AS location, 165000.0 AS monthly_budget),
+                STRUCT('Frederick, MD'    AS location, 147500.0 AS monthly_budget),
+                STRUCT('Hoboken, NJ'      AS location, 267500.0 AS monthly_budget),
+                STRUCT('Jersey City, NJ'  AS location, 250000.0 AS monthly_budget),
+                STRUCT('Lancaster, PA'    AS location,  50000.0 AS monthly_budget),
+                STRUCT('Montclair, NJ'    AS location, 192500.0 AS monthly_budget),
+                STRUCT('Old Bridge, NJ'   AS location,  97500.0 AS monthly_budget),
+                STRUCT('Red Bank, NJ'     AS location, 160000.0 AS monthly_budget),
+                STRUCT('Ridgewood, NJ'    AS location, 150000.0 AS monthly_budget),
+                STRUCT('Short Hills, NJ'  AS location, 167500.0 AS monthly_budget),
+                STRUCT('Tribeca, NY'      AS location,  50000.0 AS monthly_budget),
+                STRUCT('Waldorf, MD'      AS location,  35000.0 AS monthly_budget)
+            ])
+        ),
+        current_period AS (
             SELECT
                 center_name,
                 SUM(sales_exc_tax)                                                                  AS cash_sales,
@@ -315,10 +337,11 @@ def get_mtd_summary(
             c.cash_sales,
             c.avg_daily_sales,
             c.avg_daily_sales * {days_in_month}                                         AS trending,
-            CAST(NULL AS NUMERIC)                                                        AS monthly_budget,
-            CAST(NULL AS NUMERIC)                                                        AS surplus_shortfall,
-            CAST(NULL AS NUMERIC)                                                        AS pct_to_goal_mtd,
-            CAST(NULL AS NUMERIC)                                                        AS pct_to_goal_total,
+            b.monthly_budget,
+            c.cash_sales - b.monthly_budget                                             AS surplus_shortfall,
+            SAFE_DIVIDE(c.cash_sales, NULLIF(b.monthly_budget, 0)) * 100               AS pct_to_goal_mtd,
+            SAFE_DIVIDE(c.avg_daily_sales * {days_in_month}, NULLIF(b.monthly_budget, 0)) * 100
+                                                                                        AS pct_to_goal_total,
             c.cash_sales_excl_mbr,
             c.current_week_revenue,
             COALESCE(pw.pw_revenue, 0)                                                   AS prior_week_revenue,
@@ -343,6 +366,7 @@ def get_mtd_summary(
             c.non_members,
             SAFE_DIVIDE(c.new_members, NULLIF(c.total_guests, 0)) * 100                 AS membership_adoption
         FROM current_period c
+        LEFT JOIN budget_lookup b  ON c.center_name = b.location
         LEFT JOIN prior_week  pw ON c.center_name = pw.center_name
         LEFT JOIN prior_month pm ON c.center_name = pm.center_name
         LEFT JOIN prior_year  py ON c.center_name = py.center_name

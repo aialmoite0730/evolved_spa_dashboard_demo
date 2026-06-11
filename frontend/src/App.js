@@ -12,12 +12,15 @@ import CategoryBreakdown from "./components/CategoryBreakdown";
 import EmployeeUtilTable from "./components/EmployeeUtilTable";
 import EmployeeRphTable from "./components/EmployeeRphTable";
 import EmployeeScorecard from "./components/EmployeeScorecard";
+import AppointmentsDashboard from "./components/AppointmentsDashboard";
+import AiInsights from "./components/AiInsights";
 
 const TABS = [
   { id: "daily",     label: "Daily KPIs" },
   { id: "mtd",       label: "MTD Performance" },
   { id: "ops",       label: "Operations" },
   { id: "scorecard", label: "Employee Scorecard" },
+  { id: "appointments", label: "Appointments" },
 ];
 
 function fmtDateLong(dateStr) {
@@ -186,6 +189,14 @@ export default function App() {
       {/* ══ CONTENT ══════════════════════════════════════════════════════════ */}
       <div className="content">
 
+        {/* ══ AI INSIGHTS ═════════════════════════════════════════════════════ */}
+        <AiInsights
+          tab={tab}
+          dash={dash}
+          effectiveStart={dash.effectiveStart}
+          effectiveEnd={dash.effectiveEnd}
+        />
+
         {/* ─── DAILY KPIs ─────────────────────────────────────────────── */}
         {tab === "daily" && (
           <>
@@ -216,7 +227,7 @@ export default function App() {
 
             <div className="sec-hdr">
               {isDay ? "KPIs" : "Prior Day KPIs"}
-              <span className="sec-sub">{fmtDateLong(dash.effectiveDailyDate)}</span>
+              <span className="sec-sub">{fmtDateLong(dash.effectiveEnd)}</span>
             </div>
             <DailyKPITable data={dash.dailyKpis} />
 
@@ -322,6 +333,28 @@ export default function App() {
         {/* ─── EMPLOYEE SCORECARD ─────────────────────────────────────── */}
         {tab === "scorecard" && (
           <EmployeeScorecard data={dash.employeeScorecard} />
+        )}
+
+        {/* ─── APPOINTMENTS ───────────────────────────────────────────── */}
+        {tab === "appointments" && (
+          <>
+            <div className="sec-hdr">
+              Appointments Dashboard
+              <span className="sec-sub">
+                {isDay ? fmtDateLong(dash.effectiveEnd) : mtdLabel(dash.effectiveStart, dash.effectiveEnd)}
+              </span>
+            </div>
+            <AppointmentsDashboard
+              summary={dash.apptSummary}
+              byStatus={dash.apptByStatus}
+              byCategory={dash.apptByCategory}
+              byProvider={dash.apptByProvider}
+              bySource={dash.apptBySource}
+              cancelReasons={dash.apptCancelReasons}
+              dailyTrend={dash.apptDailyTrend}
+              requestType={dash.apptRequestType}
+            />
+          </>
         )}
 
       </div>

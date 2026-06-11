@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
@@ -13,13 +13,6 @@ function monthStart() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
 }
 
-// Returns dateStr minus 1 day (used to find last completed day in month view)
-function dateMinus1(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
 function qs(obj) {
   const p = new URLSearchParams();
   Object.entries(obj).forEach(([k, v]) => {
@@ -29,23 +22,23 @@ function qs(obj) {
   return p.toString() ? "?" + p.toString() : "";
 }
 
-async function fetchJSON(path) {
-  const res = await fetch(API + path);
+async function fetchJSON(path, signal) {
+  const res = await fetch(API + path, { signal });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
   return res.json();
 }
 
+// How long to wait after the last filter change before firing requests (ms).
+// Prevents double-fetch when two filter keys change back-to-back (e.g. startDate + endDate).
+const DEBOUNCE_MS = 300;
+
 export function useDashboard() {
-  // viewMode: "day" | "month"
   const [viewMode, setViewMode] = useState("month");
 
   const [filters, setFilters] = useState({
-    // Month view
     startDate: monthStart(),
     endDate:   today(),
-    // Day view
     dayDate:   yesterday(),
-    // Shared
     locations: [],
   });
 
@@ -62,8 +55,21 @@ export function useDashboard() {
   const [employeeUtil,      setEmployeeUtil]      = useState([]);
   const [employeeRph,       setEmployeeRph]       = useState([]);
   const [employeeScorecard, setEmployeeScorecard] = useState([]);
-  const [loading,           setLoading]           = useState(false);
-  const [error,             setError]             = useState(null);
+  const [apptSummary,       setApptSummary]       = useState([]);
+  const [apptByStatus,      setApptByStatus]      = useState([]);
+  const [apptByCategory,    setApptByCategory]    = useState([]);
+  const [apptByProvider,    setApptByProvider]    = useState([]);
+  const [apptBySource,      setApptBySource]      = useState([]);
+  const [apptCancelReasons, setApptCancelReasons] = useState([]);
+  const [apptDailyTrend,    setApptDailyTrend]    = useState([]);
+  const [apptRequestType,   setApptRequestType]   = useState([]);
+
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+
+  // Refs for debounce timer and in-flight AbortController
+  const debounceTimer = useRef(null);
+  const abortCtrl     = useRef(null);
 
   useEffect(() => {
     fetchJSON("/api/locations")
@@ -71,78 +77,136 @@ export function useDashboard() {
       .catch(e => setError(e.message));
   }, []);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Core fetch — called after debounce settles. Receives a stable snapshot of
+  // filters + viewMode so it doesn't need them as deps (avoids stale closure issues).
+  const fetchAll = useCallback(async (snapshot, signal) => {
+    const { filters: f, viewMode: vm } = snapshot;
 
-    const loc    = filters.locations.length ? filters.locations : undefined;
+    const loc    = f.locations.length ? f.locations : undefined;
     const locArg = loc ? { locations: loc } : {};
 
-    // In day view, use dayDate as both start and end so all endpoints
-    // treat it as a single-day range — no special backend changes needed.
-    const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
-    const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
+    const effectiveStart = vm === "day" ? f.dayDate : f.startDate;
+    const effectiveEnd   = vm === "day" ? f.dayDate : f.endDate;
 
-    // Daily endpoints always query the last completed day:
-    //   - Day view:   the selected dayDate
-    //   - Month view: endDate - 1, because endDate (e.g. May 31 = today)
-    //                 has no data yet, so we show the prior closed day instead.
-    const dailyDate = viewMode === "day" ? effectiveEnd : dateMinus1(effectiveEnd);
-
-    const dateQ = qs({ date: dailyDate, ...locArg });
+    const dateQ = qs({ date: effectiveEnd,                           ...locArg });
     const mtdQ  = qs({ start_date: effectiveStart, end_date: effectiveEnd, ...locArg });
 
-    try {
-      const [
-        header, kpis, dmix,
-        mtd, mmix, trend,
-        ops, rev, cat,
-        util, rph, scorecard,
-      ] = await Promise.all([
-        fetchJSON(`/api/mtd-kpi-header${mtdQ}`),
-        fetchJSON(`/api/daily-kpis${dateQ}`),
-        fetchJSON(`/api/daily-sales-mix${dateQ}`),
-        fetchJSON(`/api/mtd-summary${mtdQ}`),
-        fetchJSON(`/api/mtd-sales-mix${mtdQ}`),
-        fetchJSON(`/api/monthly-trend${mtdQ}`),
-        fetchJSON(`/api/operations-summary${mtdQ}`),
-        fetchJSON(`/api/revenue-trend${mtdQ}`),
-        fetchJSON(`/api/category-breakdown${mtdQ}`),
-        fetchJSON(`/api/employee-utilization${mtdQ}`),
-        fetchJSON(`/api/employee-rph${mtdQ}`),
-        fetchJSON(`/api/employee-scorecard${mtdQ}`),
-      ]);
+    const [
+      header, kpis, dmix,
+      mtd, mmix, trend,
+      ops, rev, cat,
+      util, rph, scorecard,
+      aSummary, aStatus, aCategory,
+      aProvider, aSource, aCancelReasons,
+      aDailyTrend, aRequestType,
+    ] = await Promise.all([
+      fetchJSON(`/api/mtd-kpi-header${mtdQ}`,                      signal),
+      fetchJSON(`/api/daily-kpis${dateQ}`,                         signal),
+      fetchJSON(`/api/daily-sales-mix${dateQ}`,                    signal),
+      fetchJSON(`/api/mtd-summary${mtdQ}`,                         signal),
+      fetchJSON(`/api/mtd-sales-mix${mtdQ}`,                       signal),
+      fetchJSON(`/api/monthly-trend${mtdQ}`,                       signal),
+      fetchJSON(`/api/operations-summary${mtdQ}`,                  signal),
+      fetchJSON(`/api/revenue-trend${mtdQ}`,                       signal),
+      fetchJSON(`/api/category-breakdown${mtdQ}`,                  signal),
+      fetchJSON(`/api/employee-utilization${mtdQ}`,                signal),
+      fetchJSON(`/api/employee-rph${mtdQ}`,                        signal),
+      fetchJSON(`/api/employee-scorecard${mtdQ}`,                  signal),
+      fetchJSON(`/api/appointments/summary${mtdQ}`,                signal),
+      fetchJSON(`/api/appointments/by-status${mtdQ}`,              signal),
+      fetchJSON(`/api/appointments/by-category${mtdQ}`,            signal),
+      fetchJSON(`/api/appointments/by-provider${mtdQ}`,            signal),
+      fetchJSON(`/api/appointments/by-booking-source${mtdQ}`,      signal),
+      fetchJSON(`/api/appointments/cancellation-reasons${mtdQ}`,   signal),
+      fetchJSON(`/api/appointments/daily-trend${mtdQ}`,            signal),
+      fetchJSON(`/api/appointments/request-type${mtdQ}`,           signal),
+    ]);
 
-      setKpiHeader(header);
-      setDailyKpis(kpis);
-      setDailyMix(dmix);
-      setMtdSummary(mtd);
-      setMtdMix(mmix);
-      setMonthlyTrend(trend);
-      setOperations(ops);
-      setRevenueTrend(rev);
-      setCategoryBreakdown(cat);
-      setEmployeeUtil(util);
-      setEmployeeRph(rph);
-      setEmployeeScorecard(scorecard);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [filters, viewMode]);
+    setKpiHeader(header);
+    setDailyKpis(kpis);
+    setDailyMix(dmix);
+    setMtdSummary(mtd);
+    setMtdMix(mmix);
+    setMonthlyTrend(trend);
+    setOperations(ops);
+    setRevenueTrend(rev);
+    setCategoryBreakdown(cat);
+    setEmployeeUtil(util);
+    setEmployeeRph(rph);
+    setEmployeeScorecard(scorecard);
+    setApptSummary(aSummary);
+    setApptByStatus(aStatus);
+    setApptByCategory(aCategory);
+    setApptByProvider(aProvider);
+    setApptBySource(aSource);
+    setApptCancelReasons(aCancelReasons);
+    setApptDailyTrend(aDailyTrend);
+    setApptRequestType(aRequestType);
+  }, []);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  // Debounced refresh — cancels the previous in-flight batch, waits DEBOUNCE_MS,
+  // then fires a fresh batch with the latest filter snapshot.
+  const refresh = useCallback(() => {
+    // Cancel any pending debounce timer
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
+    // Abort any in-flight requests from the previous batch
+    if (abortCtrl.current) abortCtrl.current.abort();
+
+    debounceTimer.current = setTimeout(() => {
+      const controller = new AbortController();
+      abortCtrl.current = controller;
+
+      // Capture a snapshot of current state at the moment the timer fires.
+      // Using a functional-style setState read via a ref to avoid stale closure.
+      setFilters(currentFilters => {
+        setViewMode(currentViewMode => {
+          setLoading(true);
+          setError(null);
+
+          fetchAll({ filters: currentFilters, viewMode: currentViewMode }, controller.signal)
+            .catch(e => {
+              // AbortError is expected when a newer request cancels this one — ignore it.
+              if (e.name !== "AbortError") setError(e.message);
+            })
+            .finally(() => setLoading(false));
+
+          // Return the same values — we're just reading, not updating.
+          return currentViewMode;
+        });
+        return currentFilters;
+      });
+    }, DEBOUNCE_MS);
+  }, [fetchAll]);
+
+  // Re-run whenever filters or viewMode change
+  useEffect(() => {
+    refresh();
+    // Cleanup: cancel timer + abort on unmount or before next run
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      if (abortCtrl.current)     abortCtrl.current.abort();
+    };
+  }, [filters, viewMode, refresh]);
+
+  // ── Filter helpers ─────────────────────────────────────────────────────────
+
+  // Accepts a single key update. When startDate changes and would exceed endDate,
+  // both are updated in ONE setFilters call — preventing a double fetch.
   function updateFilter(key, val) {
     setFilters(f => {
       if (key === "startDate") {
-        // Prevent MTD To from going earlier than MTD From
         const newEndDate = val > f.endDate ? val : f.endDate;
         return { ...f, startDate: val, endDate: newEndDate };
       }
       return { ...f, [key]: val };
     });
+  }
+
+  // Convenience: update both dates atomically in one state update.
+  // Use this from any component that changes both start and end at once.
+  function updateDateRange(start, end) {
+    setFilters(f => ({ ...f, startDate: start, endDate: end }));
   }
 
   function toggleLocation(loc) {
@@ -154,17 +218,12 @@ export function useDashboard() {
     });
   }
 
-  // Expose effective dates so App.js labels always reflect what was queried
   const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
   const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
 
-  // The actual date used for daily-kpis / daily-sales-mix — shown in the
-  // "Prior Day KPIs" section header so the label matches the data.
-  const effectiveDailyDate = viewMode === "day" ? filters.dayDate : dateMinus1(filters.endDate);
-
   return {
     viewMode, setViewMode,
-    filters, effectiveStart, effectiveEnd, effectiveDailyDate,
+    filters, effectiveStart, effectiveEnd,
     locations,
     kpiHeader,
     dailyKpis, dailyMix,
@@ -173,10 +232,11 @@ export function useDashboard() {
     operations,
     revenueTrend,
     categoryBreakdown,
-    employeeUtil,
-    employeeRph,
-    employeeScorecard,
+    employeeUtil, employeeRph, employeeScorecard,
+    apptSummary, apptByStatus, apptByCategory,
+    apptByProvider, apptBySource, apptCancelReasons,
+    apptDailyTrend, apptRequestType,
     loading, error,
-    updateFilter, toggleLocation, refresh,
+    updateFilter, updateDateRange, toggleLocation, refresh,
   };
 }
