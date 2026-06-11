@@ -167,8 +167,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
   const [aiLoading,  setAiLoading]  = useState(false);
   const [insight,    setInsight]    = useState("");
   const [error,      setError]      = useState("");
-  const [debugLog,   setDebugLog]   = useState([]);
-  const [showDebug,  setShowDebug]  = useState(false);
 
   // Track the last key we successfully generated insights for so we don't re-run
   // when an unrelated re-render happens (e.g. a sibling state update in App).
@@ -193,11 +191,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
       return;
     }
     if (!mountedRef.current) return;
-    // NOTE: intentionally NOT checking hasData() here.
-    // When called from the dash.loading watcher, React may not have flushed
-    // the latest dash arrays into this closure yet. We proceed and let
-    // buildPrompt() work with whatever is in dash — if truly empty the
-    // prompt will say so and Gemini will respond accordingly.
 
     // Cancel any in-flight Gemini request
     if (abortRef.current) abortRef.current.abort();
@@ -205,23 +198,12 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     abortRef.current = controller;
 
     setAiLoading(true);
-    setDebugLog([]);
     setError("");
     setInsight("");
     setOpen(true);
 
-    const log = (msg) => {
-      console.log("[AiInsights]", msg);
-      setDebugLog(prev => [...prev, `${new Date().toISOString().slice(11,23)} — ${msg}`]);
-    };
-
     try {
-      log(`Tab: ${tab} | View: ${dash.viewMode} | Range: ${effectiveStart} → ${effectiveEnd}`);
-      log(`Data check — dailyKpis: ${(dash.dailyKpis||[]).length}, mtdSummary: ${(dash.mtdSummary||[]).length}, ops: ${(dash.operations||[]).length}, appt: ${(dash.apptSummary||[]).length}, scorecard: ${(dash.employeeScorecard||[]).length}`);
-      log(`kpiHeader.mtd_revenue: ${dash.kpiHeader?.mtd_revenue ?? "null"}`);
-
       const prompt = buildPrompt(tab, dash, effectiveStart, effectiveEnd, dash.viewMode);
-      log(`Prompt built (${prompt.length} chars) — sending to Gemini…`);
 
       const res = await fetch(API_URL, {
         method: "POST",
@@ -236,24 +218,20 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
         }),
       });
 
-      log(`Gemini response status: ${res.status}`);
       if (!mountedRef.current) return;
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        log(`Error body: ${JSON.stringify(err)}`);
         if (res.status === 429) throw new Error("Rate limit — wait a moment then click ↺ Regenerate.");
         throw new Error(err?.error?.message || `HTTP ${res.status}`);
       }
 
       const data = await res.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      log(`Response received — ${text.length} chars, finish reason: ${data?.candidates?.[0]?.finishReason}`);
-      if (!text) log("WARNING: empty text in response — candidates: " + JSON.stringify(data?.candidates?.length));
       if (mountedRef.current) setInsight(text.trim());
 
     } catch (e) {
-      if (e.name === "AbortError") { log("Aborted (new request superseded this one)"); return; }
+      if (e.name === "AbortError") return;
       if (mountedRef.current) setError(e.message);
     } finally {
       if (mountedRef.current) setAiLoading(false);
@@ -261,13 +239,10 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
   }, [tab, dash, effectiveStart, effectiveEnd, apiKey]); // eslint-disable-line
 
   // ── Auto-trigger: fires only after the dashboard finishes loading ─────────
-  // Key includes tab + dates. When the key changes we mark it as "pending".
-  // We then watch dash.loading: once it goes false with the correct key, we fire.
   const pendingKeyRef = useRef(null);
   const isMountedOnce = useRef(false); // skip the very first render
 
   useEffect(() => {
-    // Skip on initial mount — don't auto-trigger Gemini on first page load.
     if (!isMountedOnce.current) {
       isMountedOnce.current = true;
       return;
@@ -277,23 +252,18 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     setInsight("");
     setError("");
 
-    if (lastKeyRef.current === key) return; // already analyzed this exact state
+    if (lastKeyRef.current === key) return;
 
     if (!dash.loading) {
-      // Data is already loaded (e.g. tab switch) — fire immediately.
       lastKeyRef.current    = key;
       pendingKeyRef.current = null;
       generate();
     } else {
-      // Data is still fetching (e.g. date/filter change) — mark as pending
-      // and let the dash.loading watcher fire once the fetch completes.
       pendingKeyRef.current = key;
     }
   }, [tab, effectiveStart, effectiveEnd]); // eslint-disable-line
 
   useEffect(() => {
-    // dash.loading just flipped to false — pick up any pending analysis
-    // that was queued by a date/filter change.
     if (dash.loading) return;
 
     const key = `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
@@ -312,8 +282,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     scorecard: "Employee Scorecard", appointments: "Appointments",
   }[tab] || tab;
 
-  // Combined loading state: show "Waiting for data…" while dashboard loads,
-  // then "Analyzing…" while Gemini is running.
   const dashLoading = dash.loading;
 
   return (
@@ -364,7 +332,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
             <button className="ai-insights-close" onClick={() => setOpen(false)}>✕</button>
           </div>
 
-          {/* Step 1: dashboard data is still fetching */}
           {dashLoading && !aiLoading && (
             <div className="ai-insights-loading">
               <span className="ai-pulse">●</span>
@@ -374,7 +341,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
             </div>
           )}
 
-          {/* Step 2: Gemini is analyzing */}
           {aiLoading && (
             <div className="ai-insights-loading">
               <span className="ai-pulse">●</span>
@@ -397,31 +363,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
           {!dashLoading && !aiLoading && !error && !insight && (
             <div className="ai-insights-loading" style={{ color: "#aaa" }}>
               Waiting for data…
-            </div>
-          )}
-
-          {/* ── Debug log ── */}
-          {debugLog.length > 0 && (
-            <div style={{ marginTop: 8, borderTop: "1px solid #eee", paddingTop: 6 }}>
-              <button
-                onClick={() => setShowDebug(v => !v)}
-                style={{
-                  fontSize: 9, background: "none", border: "none", cursor: "pointer",
-                  color: "#999", letterSpacing: "0.1em", textTransform: "uppercase",
-                  fontFamily: "'Josefin Sans',sans-serif", padding: 0,
-                }}
-              >
-                {showDebug ? "▾ Hide Debug" : "▸ Show Debug"} ({debugLog.length} steps)
-              </button>
-              {showDebug && (
-                <pre style={{
-                  margin: "6px 0 0", padding: "8px 10px", background: "#f7f7f7",
-                  borderRadius: 4, fontSize: 10, lineHeight: 1.7, color: "#555",
-                  overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                }}>
-                  {debugLog.join("\n")}
-                </pre>
-              )}
             </div>
           )}
         </div>
