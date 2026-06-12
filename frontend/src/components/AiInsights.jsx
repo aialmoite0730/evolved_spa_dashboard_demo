@@ -221,8 +221,7 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
   const [aiLoading,  setAiLoading]  = useState(false);
   const [insight,    setInsight]    = useState("");
   const [error,      setError]      = useState("");
-  const [debugLog,   setDebugLog]   = useState([]);
-  const [showDebug,  setShowDebug]  = useState(false);
+  const [provider,   setProvider]   = useState(null); // "openai" | "gemini" — which one produced the current insight
 
   const lastKeyRef  = useRef(null);
   const mountedRef  = useRef(true);
@@ -308,61 +307,52 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     setProvider(null);
     setOpen(true);
 
-    const log = (msg) => {
-      console.log("[AiInsights]", msg);
-      setDebugLog(prev => [...prev, `${new Date().toISOString().slice(11,23)} — ${msg}`]);
-    };
+    const prompt = buildPrompt(tab, dash, effectiveStart, effectiveEnd, dash.viewMode);
 
-    try {
-      log(`Tab: ${tab} | View: ${dash.viewMode} | Range: ${effectiveStart} → ${effectiveEnd}`);
-      log(`Data check — dailyKpis: ${(dash.dailyKpis||[]).length}, mtdSummary: ${(dash.mtdSummary||[]).length}, ops: ${(dash.operations||[]).length}, appt: ${(dash.apptSummary||[]).length}, scorecard: ${(dash.employeeScorecard||[]).length}`);
-      log(`kpiHeader.mtd_revenue: ${dash.kpiHeader?.mtd_revenue ?? "null"}`);
+    // Try OpenAI first (if configured), fall back to Gemini on any failure.
+    let text = "";
+    let usedProvider = null;
+    let lastErr = null;
 
-      const prompt = buildPrompt(tab, dash, effectiveStart, effectiveEnd, dash.viewMode);
-      log(`Prompt built (${prompt.length} chars) — sending to Gemini…`);
-
-      const res = await fetch(API_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "X-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 600 },
-        }),
-      });
-
-      log(`Gemini response status: ${res.status}`);
-      if (!mountedRef.current) return;
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        log(`Error body: ${JSON.stringify(err)}`);
-        if (res.status === 429) throw new Error("Rate limit — wait a moment then click ↺ Regenerate.");
-        throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    if (openaiApiKey) {
+      try {
+        text = await callOpenAI(prompt, controller.signal);
+        usedProvider = "openai";
+      } catch (e) {
+        if (e.name === "AbortError") return;
+        lastErr = e;
       }
-
-      const data = await res.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      log(`Response received — ${text.length} chars, finish reason: ${data?.candidates?.[0]?.finishReason}`);
-      if (!text) log("WARNING: empty text in response — candidates: " + JSON.stringify(data?.candidates?.length));
-      if (mountedRef.current) setInsight(text.trim());
-
-    } catch (e) {
-      if (e.name === "AbortError") { log("Aborted (new request superseded this one)"); return; }
-      if (mountedRef.current) setError(e.message);
-    } finally {
-      if (mountedRef.current) setAiLoading(false);
     }
-  }, [tab, dash, effectiveStart, effectiveEnd, apiKey]); // eslint-disable-line
+
+    if (!text && apiKey) {
+      try {
+        text = await callGemini(prompt, controller.signal);
+        usedProvider = "gemini";
+        if (lastErr) lastErr = null; // Gemini succeeded, clear the OpenAI error
+      } catch (e) {
+        if (e.name === "AbortError") return;
+        lastErr = e;
+      }
+    }
+
+    if (!mountedRef.current) return;
+
+    if (text) {
+      setInsight(text);
+      setProvider(usedProvider);
+    } else if (lastErr) {
+      setError(lastErr.message);
+    } else {
+      setError("No AI provider configured.");
+    }
+
+    setAiLoading(false);
+  }, [tab, dash, effectiveStart, effectiveEnd, apiKey, openaiApiKey, callOpenAI, callGemini]); // eslint-disable-line
 
   // ── Auto-trigger: fires only after the dashboard finishes loading ─────────
-  // Key includes tab + dates. When the key changes we mark it as "pending".
-  // We then watch dash.loading: once it goes false with the correct key, we fire.
-  const pendingKeyRef = useRef(null);
-  const isMountedOnce = useRef(false); // skip the very first render
+  const pendingKeyRef     = useRef(null);
+  const isMountedOnce     = useRef(false);
+  const firstLoadDoneRef  = useRef(false);
 
   useEffect(() => {
     if (!isMountedOnce.current) {
