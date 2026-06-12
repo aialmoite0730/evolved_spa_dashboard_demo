@@ -10,7 +10,7 @@ Font:  Josefin Sans (Light 300 · Regular 400 · Bold 700)
   /* ── Brand palette ── */
   --glacier:   #F6F6F6;
   --lightgray: #E8E7E4;
-  --granite:   #111111; /* Darkened from #2E2E2E for better readability */
+  --granite:   #111111;
   --pink:      #A37B88;
   --pink-d:    #8a6272;
   --pink-l:    #f4ecee;
@@ -32,7 +32,6 @@ Font:  Josefin Sans (Light 300 · Regular 400 · Bold 700)
   --topbar:  54px;
   --tiles:   128px;
   --tabs:    40px;
-  /* --offset now correctly calculates the height without the location strip */
   --offset:  calc(var(--topbar) + var(--tiles) + var(--tabs));
   --font:      'Josefin Sans', sans-serif;
   --font-mono: 'Consolas', 'Courier New', monospace;
@@ -58,6 +57,7 @@ TOP BAR
   display: flex; align-items: center;
   padding: 0 24px; gap: 24px;
   z-index: 200;
+  overflow: hidden;
 }
 .brand { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
 .brand-mark {
@@ -81,11 +81,11 @@ TOP BAR
   background: rgba(255,255,255,0.15);
   flex-shrink: 0;
 }
-.topbar-filters { margin-left: auto; display: flex; align-items: center; gap: 16px; }
-.filter-group   { display: flex; flex-direction: column; gap: 2px; }
+.topbar-filters { margin-left: auto; display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; }
+.filter-group   { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .filter-group label {
   font-size: 8px; text-transform: uppercase;
-  letter-spacing: 0.15em; color: rgba(255,255,255,0.6); /* Lightened slightly for contrast against dark bg */
+  letter-spacing: 0.15em; color: rgba(255,255,255,0.6);
   font-weight: 400;
 }
 .ev-input {
@@ -105,6 +105,7 @@ input[type="date"].ev-input::-webkit-calendar-picker-indicator { filter: invert(
   font-size: 10px; letter-spacing: 0.08em;
   color: rgba(255,255,255,0.7); font-weight: 400;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* ═════════════════════════════════════════
@@ -121,18 +122,22 @@ SUMMARY TILES
   display: flex; flex-direction: column;
   scrollbar-width: thin; scrollbar-color: var(--lightgray) transparent;
 }
+.tiles::-webkit-scrollbar { height: 3px; }
+.tiles::-webkit-scrollbar-thumb { background: var(--lightgray); }
+.tiles::-webkit-scrollbar-track { background: transparent; }
 .tiles-row {
   display: flex; flex: 1;
-  min-width: max-content;
 }
 .tiles-row:first-child { border-bottom: 1px solid var(--border); }
 .tile {
-  min-width: 152px; flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   padding: 7px 14px;
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; justify-content: center;
-  flex-shrink: 0;
+  overflow: hidden;
 }
+.tile-lbl, .tile-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile:last-child { border-right: none; }
 .tile-lbl {
   font-size: 7.5px; text-transform: uppercase;
@@ -141,11 +146,11 @@ SUMMARY TILES
 }
 .tile-val {
   font-size: 18px; font-weight: 700;
-  color: #111111; /* Darkened for high contrast */
+  color: #111111;
   line-height: 1;
 }
 .tile-sub {
-  font-size: 9px; color: #888; /* Darkened from #aaa */
+  font-size: 9px; color: #888;
   letter-spacing: 0.02em; margin-top: 3px;
   font-weight: 400;
 }
@@ -171,17 +176,17 @@ TAB BAR
   padding: 0 24px;
   gap: 0;
   z-index: 198;
-  /* 🔴 Critical fix: Enable horizontal scrolling */
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch; /* Smooth on iOS */
-  /* Prevent flex items from shrinking below content width */
+  -webkit-overflow-scrolling: touch;
   flex-wrap: nowrap;
+  /* Hide scrollbar visually but keep functional */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
-/* Ensure tab buttons don't shrink and have consistent width */
+.tabbar::-webkit-scrollbar { display: none; }
 .tab-btn {
-  flex: 0 0 auto; /* Do not grow or shrink; use auto width */
-  /* Optional: Set a minimum width for readability */
-  min-width: 80px; /* Adjust as needed */
+  flex: 0 0 auto;
+  min-width: 80px;
   padding: 7px 18px;
   border: none; background: none;
   font-family: var(--font);
@@ -191,7 +196,7 @@ TAB BAR
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   transition: color .15s;
-  white-space: nowrap; /* Keep text on one line */
+  white-space: nowrap;
 }
 .tab-btn:hover { color: var(--granite); }
 .tab-btn.active {
@@ -204,7 +209,6 @@ TAB BAR
 MAIN CONTENT
 ══════════════════════════════════════════ */
 .content {
-  /* Adjusted margin-top to account for the fixed bars only (no location strip) */
   margin-top: var(--offset);
   padding: 20px 24px 60px;
 }
@@ -247,7 +251,7 @@ thead th {
   border-bottom: 1px solid var(--border);
   border-right: 1px solid var(--border);
   padding: 6px 9px;
-  font-size: 9px; font-weight: 600; /* Increased from 300 to 600 for readability */
+  font-size: 9px; font-weight: 600;
   letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--granite); text-align: left;
   position: sticky; top: 0; z-index: 10;
@@ -259,14 +263,14 @@ tbody td {
   border-right: 1px solid var(--border);
   padding: 4px 9px;
   vertical-align: middle;
-  color: #1a1a1a; /* Darkened from var(--granite) for optimal reading */
-  font-weight: 400; /* Increased from 300 to 400 for readability */
+  color: #1a1a1a;
+  font-weight: 400;
 }
 tbody td.r { text-align: right; }
 tbody td:last-child { border-right: none; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: #fafafa; }
-tbody td:first-child { font-weight: 600; } /* Make location names bolder */
+tbody td:first-child { font-weight: 600; }
 tfoot td {
   border-top: 2px solid var(--granite);
   border-right: 1px solid var(--border);
@@ -279,7 +283,6 @@ tfoot td {
 }
 tfoot td:first-child { text-align: left; }
 tfoot td:last-child  { border-right: none; }
-/* First col sticky */
 td:first-child, th:first-child {
   position: sticky; left: 0; background: inherit; z-index: 5;
 }
@@ -294,7 +297,8 @@ tfoot td:first-child { background: var(--lightgray); }
 .neg  { color: var(--r-text) !important; font-weight: 600 !important; }
 
 /* ══════════════════════════════════════════
-PILL BUTTONS (DUPLICATE - Kept for consistency if used elsewhere) - Can be removed if .pill in .loc-strip is sufficient */
+PILL BUTTONS
+══════════════════════════════════════════ */
 .pills-dup { display: flex; gap: 6px; align-items: center; }
 .pill-dup {
   padding: 4px 14px;
@@ -333,8 +337,8 @@ CHART AREA
   background: #ffffff;
   border: 1px solid var(--border);
   padding: 16px 18px;
-  min-height: 320px; /* Increased from 256px */
-  height: auto; /* Allow auto-expansion */
+  min-height: 320px;
+  height: auto;
   display: flex; flex-direction: column;
 }
 .chart-title {
@@ -463,18 +467,7 @@ FOOTNOTE
   line-height: 1.7; letter-spacing: 0.02em;
 }
 
-/* ═════════════════════════════════════════
-RESPONSIVE
-══════════════════════════════════════════ */
-@media (max-width: 900px) {
-  .chart-row { grid-template-columns: 1fr; }
-  .legend    { display: none; }
-  .sc-grid   { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 600px) {
-  .sc-grid { grid-template-columns: 1fr; }
-}
-/* ── Day / Month view toggle — matches ev-input topbar style ───────────────── */
+/* ── Day / Month view toggle ───────────────────────────────────────────────── */
 .view-toggle {
   display: flex;
   border: 1px solid rgba(255,255,255,0.2);
@@ -483,7 +476,6 @@ RESPONSIVE
   height: 28px;
   background: rgba(255,255,255,0.08);
 }
-
 .view-toggle-btn {
   padding: 0 14px;
   height: 100%;
@@ -499,26 +491,15 @@ RESPONSIVE
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
 }
-
-.view-toggle-btn:last-child {
-  border-right: none;
-}
-
-.view-toggle-btn.active {
-  background: #A37B88;
-  color: #fff;
-}
-
+.view-toggle-btn:last-child { border-right: none; }
+.view-toggle-btn.active { background: #A37B88; color: #fff; }
 .view-toggle-btn:hover:not(.active) {
   background: rgba(255,255,255,0.12);
   color: rgba(255,255,255,0.8);
 }
 
 /* ── AI Insights ───────────────────────────────────────────────────────────── */
-.ai-insights-wrap {
-  margin: 0 0 16px 0;
-}
-
+.ai-insights-wrap { margin: 0 0 16px 0; }
 .ai-insights-btn {
   display: inline-flex;
   align-items: center;
@@ -537,15 +518,8 @@ RESPONSIVE
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
 }
-.ai-insights-btn:hover:not(:disabled) {
-  background: #A37B88;
-  color: #fff;
-}
-.ai-insights-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
+.ai-insights-btn:hover:not(:disabled) { background: #A37B88; color: #fff; }
+.ai-insights-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .ai-insights-panel {
   margin-top: 8px;
   border: 1px solid #E8E7E4;
@@ -554,7 +528,6 @@ RESPONSIVE
   border-radius: 0 3px 3px 0;
   overflow: hidden;
 }
-
 .ai-insights-header {
   display: flex;
   align-items: center;
@@ -563,76 +536,210 @@ RESPONSIVE
   border-bottom: 1px solid #E8E7E4;
   background: #f9f7f7;
 }
-
 .ai-insights-title {
   font-family: 'Josefin Sans', sans-serif;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
   color: #A37B88;
 }
-
 .ai-insights-meta {
   font-family: 'Josefin Sans', sans-serif;
-  font-size: 9px;
-  font-weight: 300;
-  letter-spacing: 0.1em;
-  color: #aaa;
+  font-size: 9px; font-weight: 300;
+  letter-spacing: 0.1em; color: #aaa;
   margin-left: 4px;
 }
-
 .ai-insights-close {
   margin-left: auto;
-  background: none;
-  border: none;
-  font-size: 11px;
-  color: #aaa;
-  cursor: pointer;
-  padding: 2px 4px;
-  line-height: 1;
+  background: none; border: none;
+  font-size: 11px; color: #aaa;
+  cursor: pointer; padding: 2px 4px; line-height: 1;
 }
 .ai-insights-close:hover { color: #2E2E2E; }
-
 .ai-insights-body {
   padding: 14px 16px;
   font-family: 'Josefin Sans', sans-serif;
-  font-size: 12px;
-  font-weight: 300;
-  line-height: 1.7;
-  color: #2E2E2E;
+  font-size: 12px; font-weight: 300;
+  line-height: 1.7; color: #2E2E2E;
   letter-spacing: 0.02em;
 }
-.ai-insights-body p {
-  margin: 0 0 8px;
-}
+.ai-insights-body p { margin: 0 0 8px; }
 .ai-insights-body p:last-child { margin-bottom: 0; }
-
 .ai-insights-loading {
   padding: 14px 16px;
   font-family: 'Josefin Sans', sans-serif;
-  font-size: 11px;
-  font-weight: 300;
-  color: #A37B88;
-  letter-spacing: 0.1em;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  font-size: 11px; font-weight: 300;
+  color: #A37B88; letter-spacing: 0.1em;
+  display: flex; align-items: center; gap: 4px;
 }
-
-.ai-pulse {
-  animation: pulse 1.2s ease-in-out infinite;
-  font-size: 8px;
-}
+.ai-pulse { animation: pulse 1.2s ease-in-out infinite; font-size: 8px; }
 @keyframes pulse {
   0%, 100% { opacity: 0.2; }
   50%       { opacity: 1;   }
 }
-
 .ai-insights-error {
   padding: 12px 16px;
   font-family: 'Josefin Sans', sans-serif;
-  font-size: 11px;
-  color: #7f1d1d;
+  font-size: 11px; color: #7f1d1d;
   background: #fff5f5;
+}
+
+/* ══════════════════════════════════════════
+RESPONSIVE — AUTO-ADJUST LAYOUT
+Breakpoints:
+  1280px — compress topbar
+  1100px — hide report label
+   900px — single-column charts
+   768px — wrap topbar to 2 rows, tablet
+   600px — mobile
+══════════════════════════════════════════ */
+
+/* ── ≤ 1440px: laptop — tighten tile padding/sizes before they clip ── */
+@media (max-width: 1440px) {
+  .tile { padding: 6px 10px; }
+  .tile-val { font-size: 16px; }
+  .tile-lbl { font-size: 7px; letter-spacing: 0.12em; }
+  .tile-sub { font-size: 8.5px; }
+}
+
+/* ── ≤ 1280px: tighten topbar spacing ── */
+@media (max-width: 1280px) {
+  .topbar { gap: 14px; padding: 0 18px; }
+  .topbar-filters { gap: 12px; }
+  .ev-input { padding: 3px 8px; font-size: 11px; }
+}
+
+/* ── ≤ 1100px: hide report label to save space ── */
+@media (max-width: 1100px) {
+  .report-label { display: none; }
+  .topbar-divider:last-of-type { display: none; }
+  .topbar { gap: 10px; }
+  .topbar-filters { gap: 10px; }
+}
+
+/* ── ≤ 900px: single-column charts, adjust scorecard ── */
+@media (max-width: 900px) {
+  .chart-row { grid-template-columns: 1fr; gap: 10px; }
+  .legend    { display: none; }
+  .sc-grid   { grid-template-columns: 1fr 1fr; }
+  .chart-box { min-height: 260px; }
+}
+
+/* ── ≤ 768px: topbar wraps to 2 rows, tablet layout ── */
+@media (max-width: 768px) {
+  :root {
+    --topbar: 94px;
+  }
+
+  .topbar {
+    height: var(--topbar);
+    flex-wrap: wrap;
+    align-content: center;
+    padding: 8px 16px;
+    gap: 8px;
+    row-gap: 6px;
+    overflow: visible;
+  }
+
+  /* Brand stays on row 1 */
+  .brand { order: 1; flex: 0 0 auto; }
+
+  /* Loading indicator on row 1, pushed right */
+  .topbar > div[style] { order: 2; margin-left: auto; }
+
+  /* Filters take full row 2 */
+  .topbar-filters {
+    order: 3;
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* hide scrollbar */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .topbar-filters::-webkit-scrollbar { display: none; }
+
+  .topbar-divider { display: none; }
+  .report-label   { display: none; }
+
+  /* Tile strip position adjusts via JS useTopOffset */
+  .brand-sub { display: none; }
+
+  .view-toggle-btn { padding: 0 10px; font-size: 10px; }
+  .ev-input { height: 26px; font-size: 10.5px; padding: 2px 7px; }
+  .filter-group label { font-size: 7.5px; }
+
+  /* Content */
+  .content { padding: 16px 14px 40px; }
+
+  /* Tab bar */
+  .tabbar { padding: 0 14px; }
+  .tab-btn { padding: 7px 12px; font-size: 9px; letter-spacing: 0.1em; min-width: 60px; }
+
+  /* Scorecard */
+  .sc-grid { grid-template-columns: 1fr; }
+  .sc-metrics { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── ≤ 600px: mobile ── */
+@media (max-width: 600px) {
+  :root {
+    --topbar: 100px;
+    --tabs:   36px;
+  }
+
+  .topbar { padding: 6px 12px; gap: 6px; row-gap: 4px; }
+
+  .ev-input { height: 24px; font-size: 10px; padding: 2px 6px; }
+  .view-toggle { height: 24px; }
+  .view-toggle-btn { padding: 0 9px; font-size: 9.5px; }
+
+  .filter-group { min-width: 0; }
+
+  /* Tile strip */
+  .tile { min-width: 120px; padding: 5px 10px; flex: 0 0 auto; }
+  .tiles-row { min-width: max-content; }
+  .tile-val { font-size: 15px; }
+  .tile-lbl { font-size: 7px; letter-spacing: 0.1em; }
+  .tile-sub { font-size: 8px; }
+
+  /* Tab bar */
+  .tabbar { padding: 0 10px; }
+  .tab-btn { padding: 6px 10px; font-size: 8.5px; min-width: 50px; }
+
+  /* Tables */
+  thead th { padding: 5px 7px; font-size: 8px; }
+  tbody td  { padding: 4px 7px; font-size: 10.5px; }
+  tfoot td  { padding: 4px 7px; font-size: 10.5px; }
+
+  /* Content */
+  .content { padding: 12px 10px 40px; }
+
+  /* Scorecard */
+  .sc-card { padding: 14px 14px; }
+  .sc-m-val { font-size: 14px; }
+
+  /* Charts */
+  .chart-box { min-height: 220px; padding: 12px 12px; }
+
+  /* AI Insights */
+  .ai-insights-body { font-size: 11px; padding: 12px; }
+  .ai-insights-btn  { font-size: 9px; padding: 0 12px; height: 27px; }
+}
+
+/* ── ≤ 420px: small phones ── */
+@media (max-width: 420px) {
+  :root { --topbar: 106px; }
+
+  .brand-name { font-size: 13px; letter-spacing: 0.14em; }
+
+  .tile { min-width: 105px; padding: 4px 8px; flex: 0 0 auto; }
+  .tile-val { font-size: 13px; }
+
+  .tab-btn { padding: 5px 8px; font-size: 8px; min-width: 44px; }
+
+  .content { padding: 10px 8px 32px; }
 }

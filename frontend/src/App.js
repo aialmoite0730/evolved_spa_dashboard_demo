@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import "./App.css";
 import { useDashboard } from "./hooks/useDashboard";
 import KpiHeader from "./components/KpiHeader";
@@ -36,9 +36,35 @@ function mtdLabel(start, end) {
   return `${fmt(start)} · Through ${thru(end)}`;
 }
 
+
+// ── Dynamic offset: reads actual rendered bar heights so content is never
+// hidden behind fixed elements regardless of screen size / breakpoint. ────────
+function useTopOffset() {
+  const [offset, setOffset] = useState(222); // default: 54+128+40
+  useEffect(() => {
+    function measure() {
+      const topbar = document.querySelector(".topbar");
+      const tiles  = document.querySelector(".tiles");
+      const tabbar = document.querySelector(".tabbar");
+      if (topbar && tiles && tabbar) {
+        setOffset(
+          topbar.getBoundingClientRect().height +
+          tiles.getBoundingClientRect().height  +
+          tabbar.getBoundingClientRect().height
+        );
+      }
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  return offset;
+}
+
 export default function App() {
   const dash = useDashboard();
   const [tab, setTab] = useState("daily");
+  const topOffset = useTopOffset();
 
   const locCount       = dash.locations.length;
   const activeLocCount = dash.filters.locations.length;
@@ -187,7 +213,7 @@ export default function App() {
       )}
 
       {/* ══ CONTENT ══════════════════════════════════════════════════════════ */}
-      <div className="content">
+      <div className="content" style={{ marginTop: topOffset }}>
 
         {/* ══ AI INSIGHTS ═════════════════════════════════════════════════════ */}
         <AiInsights
@@ -212,6 +238,8 @@ export default function App() {
                     yKey="cash_sales"
                     label="Cash Sales"
                     yType="cur"
+                    secondaryKey="daily_need"
+                    secondaryLabel="Daily Need"
                   />
                 </div>
               </div>
@@ -251,8 +279,10 @@ export default function App() {
                     data={dash.mtdSummary}
                     xKey="location"
                     yKey="cash_sales"
-                    label="Cash Sales"
+                    label="MTD Sales"
                     yType="cur"
+                    secondaryKey="monthly_budget"
+                    secondaryLabel="Budget"
                   />
                 </div>
               </div>
