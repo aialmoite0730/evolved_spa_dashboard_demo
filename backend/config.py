@@ -52,9 +52,19 @@ SALES_TABLE    = os.getenv("BIGQUERY_TABLE",            "sales_accrual")
 SCHEDULE_TABLE = os.getenv("BIGQUERY_SCHEDULE_TABLE",   "employee_schedule")
 APPT_TABLE     = os.getenv("BIGQUERY_APPT_TABLE",       "appointments")
 ERROR_TABLE    = os.getenv("BIGQUERY_ERROR_TABLE",      "api_error_log")
+API_LOG_TABLE  = os.getenv("BIGQUERY_API_LOG_TABLE",    "api_log")
+INSIGHTS_TABLE = os.getenv("BIGQUERY_INSIGHTS_TABLE",   "ai_insights_log")
 
-# Fully-qualified backtick references for use directly in SQL f-strings
-FULL_SALES    = f"`{PROJECT_ID}.{DATASET}.{SALES_TABLE}`"
-FULL_SCHEDULE = f"`{PROJECT_ID}.{DATASET}.{SCHEDULE_TABLE}`"
-FULL_APPT     = f"`{PROJECT_ID}.{DATASET}.{APPT_TABLE}`"
-FULL_ERRORS   = f"`{PROJECT_ID}.{DATASET}.{ERROR_TABLE}`"
+# Fully-qualified backtick references — for use inside SQL f-strings only
+FULL_SALES     = f"`{PROJECT_ID}.{DATASET}.{SALES_TABLE}`"
+FULL_SCHEDULE  = f"`{PROJECT_ID}.{DATASET}.{SCHEDULE_TABLE}`"
+FULL_APPT      = f"`{PROJECT_ID}.{DATASET}.{APPT_TABLE}`"
+FULL_ERRORS    = f"`{PROJECT_ID}.{DATASET}.{ERROR_TABLE}`"
+FULL_API_LOG   = f"`{PROJECT_ID}.{DATASET}.{API_LOG_TABLE}`"
+FULL_INSIGHTS  = f"`{PROJECT_ID}.{DATASET}.{INSIGHTS_TABLE}`"
+
+# Plain dotted references — for BigQuery streaming inserts (insert_rows_json)
+# insert_rows_json does NOT accept backtick-quoted strings.
+PLAIN_API_LOG  = f"{PROJECT_ID}.{DATASET}.{API_LOG_TABLE}"
+PLAIN_INSIGHTS = f"{PROJECT_ID}.{DATASET}.{INSIGHTS_TABLE}"
+PLAIN_ERRORS   = f"{PROJECT_ID}.{DATASET}.{ERROR_TABLE}"

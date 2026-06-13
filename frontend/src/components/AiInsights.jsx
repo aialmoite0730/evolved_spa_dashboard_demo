@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = "gpt-4o-mini";
+const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 function currency(n) {
@@ -217,15 +214,17 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) {
-  const [open,       setOpen]       = useState(true);
-  const [aiLoading,  setAiLoading]  = useState(false);
-  const [insight,    setInsight]    = useState("");
-  const [error,      setError]      = useState("");
-  const [provider,   setProvider]   = useState(null); // "openai" | "gemini" — which one produced the current insight
+  const [open,      setOpen]      = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [insight,   setInsight]   = useState("");
+  const [error,     setError]     = useState("");
 
-  const lastKeyRef  = useRef(null);
-  const mountedRef  = useRef(true);
-  const abortRef    = useRef(null);
+  const lastKeyRef     = useRef(null);
+  const pendingKeyRef  = useRef(null);
+  const mountedRef     = useRef(true);
+  const abortRef       = useRef(null);
+  // Tracks whether the first real data load has completed — AI never fires before this.
+  const firstLoadDoneRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -235,66 +234,8 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     };
   }, []);
 
-  const apiKey       = process.env.REACT_APP_GEMINI_API_KEY;
-  const openaiApiKey = process.env.REACT_APP_OPENAI_API_KEY;
-
-  // ── Provider callers ────────────────────────────────────────────────────
-  const callOpenAI = useCallback(async (prompt, signal) => {
-    const res = await fetch(OPENAI_URL, {
-      method: "POST",
-      signal,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${openaiApiKey}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.2,
-        max_tokens: 600,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      if (res.status === 429) throw new Error("Rate limit — wait a moment then click ↺ Regenerate.");
-      throw new Error(err?.error?.message || `OpenAI HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    return (data?.choices?.[0]?.message?.content || "").trim();
-  }, [openaiApiKey]);
-
-  const callGemini = useCallback(async (prompt, signal) => {
-    const res = await fetch(GEMINI_URL, {
-      method: "POST",
-      signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 600 },
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      if (res.status === 429) throw new Error("Rate limit — wait a moment then click ↺ Regenerate.");
-      throw new Error(err?.error?.message || `Gemini HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    return (data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-  }, [apiKey]);
-
+  // ── Generate via backend ────────────────────────────────────────────────
   const generate = useCallback(async () => {
-    if (!openaiApiKey && !apiKey) {
-      setError("Add REACT_APP_OPENAI_API_KEY (and/or REACT_APP_GEMINI_API_KEY as fallback) to your .env file.");
-      setOpen(true);
-      return;
-    }
     if (!mountedRef.current) return;
 
     if (abortRef.current) abortRef.current.abort();
@@ -304,71 +245,51 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     setAiLoading(true);
     setError("");
     setInsight("");
-    setProvider(null);
     setOpen(true);
 
     const prompt = buildPrompt(tab, dash, effectiveStart, effectiveEnd, dash.viewMode);
 
-    // Try OpenAI first (if configured), fall back to Gemini on any failure.
-    let text = "";
-    let usedProvider = null;
-    let lastErr = null;
+    try {
+      const res = await fetch(`${API}/api/insights`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tab,
+          prompt,
+          view_mode:  dash.viewMode,
+          start_date: effectiveStart,
+          end_date:   effectiveEnd,
+          locations:  dash.filters?.locations || [],
+        }),
+      });
 
-    if (openaiApiKey) {
-      try {
-        text = await callOpenAI(prompt, controller.signal);
-        usedProvider = "openai";
-      } catch (e) {
-        if (e.name === "AbortError") return;
-        lastErr = e;
+      if (!mountedRef.current) return;
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail?.error || err?.detail || `Server error ${res.status}`);
       }
-    }
 
-    if (!text && apiKey) {
-      try {
-        text = await callGemini(prompt, controller.signal);
-        usedProvider = "gemini";
-        if (lastErr) lastErr = null; // Gemini succeeded, clear the OpenAI error
-      } catch (e) {
-        if (e.name === "AbortError") return;
-        lastErr = e;
-      }
-    }
-
-    if (!mountedRef.current) return;
-
-    if (text) {
-      setInsight(text);
-      setProvider(usedProvider);
-    } else if (lastErr) {
-      setError(lastErr.message);
-    } else {
-      setError("No AI provider configured.");
+      const data = await res.json();
+      setInsight(data.insight || "");
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      if (!mountedRef.current) return;
+      setError(e.message);
     }
 
     setAiLoading(false);
-  }, [tab, dash, effectiveStart, effectiveEnd, apiKey, openaiApiKey, callOpenAI, callGemini]); // eslint-disable-line
+  }, [tab, dash, effectiveStart, effectiveEnd]); // eslint-disable-line
 
-  // ── Auto-trigger: fires only after the dashboard finishes loading ─────────
-  const pendingKeyRef     = useRef(null);
-  const isMountedOnce     = useRef(false);
-  const firstLoadDoneRef  = useRef(false);
-
+  // ── Auto-trigger: fires when tab/dates change, but NEVER on first load ───
   useEffect(() => {
-    if (!isMountedOnce.current) {
-      isMountedOnce.current = true;
-      return;
-    }
-
-    if (!firstLoadDoneRef.current) {
-      if (!dash.loading) firstLoadDoneRef.current = true;
-      return;
-    }
+    // Block until the very first data load has finished.
+    if (!firstLoadDoneRef.current) return;
 
     const key = `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
     setInsight("");
     setError("");
-
     if (lastKeyRef.current === key) return;
 
     if (!dash.loading) {
@@ -380,16 +301,17 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     }
   }, [tab, effectiveStart, effectiveEnd]); // eslint-disable-line
 
+  // ── Fire pending request once dashboard finishes loading ─────────────────
   useEffect(() => {
     if (dash.loading) return;
 
+    // Mark the first load as done — from this point auto-trigger is enabled.
     if (!firstLoadDoneRef.current) {
       firstLoadDoneRef.current = true;
       return;
     }
 
     const key = `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
-
     if (pendingKeyRef.current !== key) return;
     if (lastKeyRef.current === key) return;
 
@@ -405,10 +327,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
   }[tab] || tab;
 
   const dashLoading = dash.loading;
-
-  const providerLabel = provider === "openai" ? "OpenAI · GPT-4o mini"
-    : provider === "gemini" ? "Gemini 2.0 Flash Lite (fallback)"
-    : (openaiApiKey ? "OpenAI · GPT-4o mini" : "Gemini 2.0 Flash Lite");
 
   return (
     <div className="ai-insights-wrap">
@@ -426,23 +344,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
             ? "▾ Hide Insights"
             : "✦ Show Insights"}
         </button>
-
-        {!aiLoading && !dashLoading && (
-          <button
-            className="ai-insights-btn"
-            onClick={generate}
-            style={{ opacity: 0.6, fontSize: 9 }}
-          >
-            ↺ Regenerate
-          </button>
-        )}
-
-        <span style={{
-          fontSize: 8, color: "#aaa", letterSpacing: "0.1em",
-          textTransform: "uppercase", fontFamily: "'Josefin Sans',sans-serif",
-        }}>
-          {providerLabel} · {tabLabel}
-        </span>
       </div>
 
       {open && (
@@ -453,7 +354,6 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
               {tabLabel} · {dash.viewMode === "day"
                 ? `Day · ${effectiveEnd}`
                 : `MTD · ${effectiveStart} → ${effectiveEnd}`}
-              &nbsp;· {providerLabel}
             </span>
             <button className="ai-insights-close" onClick={() => setOpen(false)}>✕</button>
           </div>
@@ -488,7 +388,7 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
 
           {!dashLoading && !aiLoading && !error && !insight && (
             <div className="ai-insights-loading" style={{ color: "#aaa" }}>
-              Waiting for data…
+              Click "✦ Show Insights" to analyze this view.
             </div>
           )}
         </div>

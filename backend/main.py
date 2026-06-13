@@ -22,6 +22,7 @@ Everything else lives in:
     operations.py    ← GET /api/operations-summary, /api/monthly-trend
     employees.py     ← GET /api/employee-utilization, /api/employee-rph, /api/employee-scorecard
     charts.py        ← GET /api/category-breakdown, /api/revenue-trend
+    insights.py      ← POST /api/insights
 """
 
 from fastapi import FastAPI
@@ -30,7 +31,9 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import triggers config.py → credential setup + BQ client init
 import config  # noqa: F401  (side-effect import)
 
-from routers import locations, daily, mtd, operations, employees, charts, appointments
+from routers import locations, daily, mtd, operations, employees, charts, appointments, insights
+from utils.request_logs import RequestLoggingMiddleware
+
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -43,18 +46,21 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],   # tighten to your frontend domain in production
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+# ─── Request / error logging ───────────────────────────────────────────────────
+app.add_middleware(RequestLoggingMiddleware)
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
-app.include_router(locations.router, tags=["Locations"])
-app.include_router(daily.router,     tags=["Daily KPIs"])
-app.include_router(mtd.router,       tags=["MTD Performance"])
-app.include_router(operations.router,tags=["Operations"])
-app.include_router(employees.router, tags=["Employees"])
-app.include_router(charts.router,       tags=["Charts"])
-app.include_router(appointments.router, tags=["Appointments"])
+app.include_router(locations.router,   tags=["Locations"])
+app.include_router(daily.router,       tags=["Daily KPIs"])
+app.include_router(mtd.router,         tags=["MTD Performance"])
+app.include_router(operations.router,  tags=["Operations"])
+app.include_router(employees.router,   tags=["Employees"])
+app.include_router(charts.router,      tags=["Charts"])
+app.include_router(appointments.router,tags=["Appointments"])
+app.include_router(insights.router,    tags=["AI Insights"])
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"])
