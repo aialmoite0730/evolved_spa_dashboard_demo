@@ -73,8 +73,8 @@ def get_mtd_kpi_header(
         y_loc     = "AND center_name IN UNNEST(@locations)" if locations else ""
 
         # Last full calendar month relative to end_date
-        lm_end_dt   = e_dt.replace(day=1) - timedelta(days=1)          # last day of prior month
-        lm_start_dt = lm_end_dt.replace(day=1)                          # first day of prior month
+        lm_end_dt   = e_dt.replace(day=1) - timedelta(days=1)
+        lm_start_dt = lm_end_dt.replace(day=1)
         lm_start_p  = bigquery.ScalarQueryParameter("lm_start", "DATE", str(lm_start_dt))
         lm_end_p    = bigquery.ScalarQueryParameter("lm_end",   "DATE", str(lm_end_dt))
 
@@ -91,7 +91,7 @@ def get_mtd_kpi_header(
             + (" AND center_name IN UNNEST(@locations)" if locations else "")
         )
 
-        # Schedule filter block (role + hours guard baked in)
+        # Schedule filter block
         _, sched_raw         = build_date_filter(s, e, locations, date_col="date")
         sched_block, sched_x = build_sched_filter(s, e, locations, sched_raw)
 
@@ -117,16 +117,31 @@ def get_mtd_kpi_header(
                     COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_id END),
                     NULLIF(COUNT(DISTINCT guest_id), 0)
                 ) * 100                                                                             AS membership_adoption_rate,
+                -- Blended ASP: all clients, excl. memberships
                 SAFE_DIVIDE(
                     SUM(CASE WHEN item_category != 'Memberships' THEN sales_exc_tax ELSE 0 END),
                     NULLIF(COUNT(DISTINCT CASE WHEN item_category != 'Memberships'
                                                THEN invoice_id END), 0)
-                )                                                                                   AS blended_asp
+                )                                                                                   AS blended_asp,
+                -- ── NEW: ASP segmented by new vs existing client ──────────────
+                SAFE_DIVIDE(
+                    SUM(CASE WHEN first_visit = true
+                              AND item_category != 'Memberships' THEN sales_exc_tax ELSE 0 END),
+                    NULLIF(COUNT(DISTINCT CASE WHEN first_visit = true
+                                               AND item_category != 'Memberships'
+                                               THEN invoice_id END), 0)
+                )                                                                                   AS asp_new_clients,
+                SAFE_DIVIDE(
+                    SUM(CASE WHEN first_visit = false
+                              AND item_category != 'Memberships' THEN sales_exc_tax ELSE 0 END),
+                    NULLIF(COUNT(DISTINCT CASE WHEN first_visit = false
+                                               AND item_category != 'Memberships'
+                                               THEN invoice_id END), 0)
+                )                                                                                   AS asp_existing_clients
             FROM {FULL_SALES}
             {where}
         ),
         yesterday_data AS (
-            -- guaranteed one row: SUM/COUNT on empty set returns NULL/0, never zero rows
             SELECT
                 COALESCE(SUM(sales_exc_tax), 0)       AS yesterday_revenue,
                 COALESCE(COUNT(DISTINCT guest_id), 0) AS yesterday_clients
@@ -135,7 +150,6 @@ def get_mtd_kpi_header(
             {y_loc}
         ),
         last_month_data AS (
-            -- guaranteed one row
             SELECT
                 COALESCE(SUM(sales_exc_tax), 0)       AS last_month_revenue,
                 COALESCE(COUNT(DISTINCT guest_id), 0) AS last_month_clients
@@ -144,7 +158,6 @@ def get_mtd_kpi_header(
             {y_loc}
         ),
         prior_year AS (
-            -- guaranteed one row
             SELECT COALESCE(SUM(sales_exc_tax), 0) AS py_revenue
             FROM {FULL_SALES}
             {py_where}
@@ -158,8 +171,6 @@ def get_mtd_kpi_header(
             GROUP BY job_name
         ),
         provider_rev AS (
-            -- LEFT JOIN guarantees one aggregate row even when no schedule rows match
-            -- (e.g. end_date is today and sales data for today doesn't exist yet)
             SELECT
                 SAFE_DIVIDE(
                     SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN sa.sales_exc_tax ELSE 0 END),
@@ -177,7 +188,6 @@ def get_mtd_kpi_header(
             {join_where}
         ),
         rebooking AS (
-            -- guaranteed one row
             SELECT
                 SAFE_DIVIDE(COUNTIF(rebooked = true), NULLIF(COUNT(*), 0)) * 100 AS rebooking_rate
             FROM {FULL_APPT}
@@ -196,6 +206,8 @@ def get_mtd_kpi_header(
             m.new_members,
             m.membership_adoption_rate,
             m.blended_asp,
+            m.asp_new_clients,
+            m.asp_existing_clients,
             y.yesterday_revenue,
             y.yesterday_clients,
             lm.last_month_revenue,
@@ -207,7 +219,6 @@ def get_mtd_kpi_header(
             pv.rev_per_provider_hr    AS rev_per_provider,
             pv.rev_per_esthetician_hr AS rev_per_esthetician,
             ROUND((1 - 0.20 - 0.22 * 1.12) * 100, 1)                                            AS gross_margin_pct,
-            -- Sum of all location monthly budgets
             1950000.0                                                                               AS monthly_budget,
             rb.rebooking_rate
         FROM mtd m
@@ -222,7 +233,6 @@ def get_mtd_kpi_header(
 
     except Exception as exc:
         log_and_raise_from_request(exc, request)
-
 
 @router.get("/api/mtd-summary")
 def get_mtd_summary(

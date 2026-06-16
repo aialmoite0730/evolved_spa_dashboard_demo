@@ -10,6 +10,20 @@ from utils.errors import log_and_raise_from_request
 router = APIRouter()
 
 
+@router.get("/api/latest-date")
+def get_latest_date(request: Request):
+    """Returns the latest sale_date that has closed sales data."""
+    try:
+        sql = f"""
+        SELECT MAX(DATE(sale_date)) AS latest_date
+        FROM {FULL_SALES}
+        WHERE LOWER(status) = 'closed'
+        """
+        rows = run_query(sql)
+        return {"latest_date": str(rows[0]["latest_date"]) if rows else None}
+    except Exception as exc:
+        log_and_raise_from_request(exc, request)
+
 @router.get("/api/daily-kpis")
 def get_daily_kpis(
     request:   Request,

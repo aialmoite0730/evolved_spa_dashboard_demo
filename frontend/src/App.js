@@ -67,8 +67,7 @@ export default function App() {
   const topOffset = useTopOffset();
 
   const locCount       = dash.locations.length;
-  const activeLocCount = dash.filters.locations.length;
-  const isDay          = dash.viewMode === "day";
+  const activeLocCount = dash.filters?.locations?.length ?? 0;
 
   return (
     <div className="app">
@@ -95,66 +94,34 @@ export default function App() {
         {/* Filters */}
         <div className="topbar-filters">
 
-          {/* ── Day / Month toggle ── */}
+          {/* ── Date inputs ── */}
           <div className="filter-group">
-            <label>View</label>
-            <div className="view-toggle">
-              <button
-                className={`view-toggle-btn${isDay ? " active" : ""}`}
-                onClick={() => dash.setViewMode("day")}
-              >
-                Day
-              </button>
-              <button
-                className={`view-toggle-btn${!isDay ? " active" : ""}`}
-                onClick={() => dash.setViewMode("month")}
-              >
-                Month
-              </button>
-            </div>
+            <label>MTD From</label>
+            <input
+              type="date"
+              className="ev-input"
+              value={dash.filters?.startDate ?? ""}
+              onChange={e => dash.updateFilter("startDate", e.target.value)}
+            />
           </div>
-
-          {/* ── Date inputs — swap based on view mode ── */}
-          {isDay ? (
-            <div className="filter-group">
-              <label>Date</label>
-              <input
-                type="date"
-                className="ev-input"
-                value={dash.filters.dayDate}
-                onChange={e => dash.updateFilter("dayDate", e.target.value)}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="filter-group">
-                <label>MTD From</label>
-                <input
-                  type="date"
-                  className="ev-input"
-                  value={dash.filters.startDate}
-                  onChange={e => dash.updateFilter("startDate", e.target.value)}
-                />
-              </div>
-              <div className="filter-group">
-                <label>MTD To</label>
-                <input
-                  type="date"
-                  className="ev-input"
-                  value={dash.filters.endDate}
-                  onChange={e => dash.updateFilter("endDate", e.target.value)}
-                />
-              </div>
-            </>
-          )}
+          <div className="filter-group">
+            <label>MTD To</label>
+            <input
+              type="date"
+              className="ev-input"
+              value={dash.filters?.endDate ?? ""}
+              onChange={e => dash.updateFilter("endDate", e.target.value)}
+            />
+          </div>
 
           {/* ── Location ── */}
           <div className="filter-group">
             <label>Location</label>
             <select
               className="ev-input"
-              value={activeLocCount === 0 ? "all" : dash.filters.locations[0]}
+              value={!dash.filters || activeLocCount === 0 ? "all" : dash.filters.locations[0]}
               onChange={e => {
+                if (!dash.filters) return;
                 if (e.target.value === "all") dash.updateFilter("locations", []);
                 else dash.updateFilter("locations", [e.target.value]);
               }}
@@ -168,16 +135,9 @@ export default function App() {
 
           {/* ── Report label ── */}
           <div className="report-label">
-            {isDay
-              ? fmtDateLong(dash.filters.dayDate)
-              : (
-                <>
-                  {fmtDateLong(dash.effectiveEnd)}
-                  &nbsp;·&nbsp;
-                  MTD {new Date(dash.effectiveStart + "T00:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-                </>
-              )
-            }
+            {fmtDateLong(dash.effectiveEnd)}
+            &nbsp;·&nbsp;
+            MTD {new Date(dash.effectiveStart + "T00:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" })}
           </div>
 
           {dash.loading && (
@@ -192,7 +152,7 @@ export default function App() {
       </div>
 
       {/* ══ KPI TILES ════════════════════════════════════════════════════════ */}
-      <KpiHeader data={dash.kpiHeader} viewMode={dash.viewMode} />
+      <KpiHeader data={dash.kpiHeader} />
 
       {/* ══ TAB BAR ══════════════════════════════════════════════════════════ */}
       <div className="tabbar">
@@ -229,7 +189,7 @@ export default function App() {
             <div className="chart-row">
               <div className="chart-box">
                 <div className="chart-title">
-                  {isDay ? "Cash Sales by Location" : "Daily Cash Sales by Location"}
+                  Daily Cash Sales by Location
                 </div>
                 <div className="chart-inner">
                   <LocationBarChart
@@ -245,7 +205,7 @@ export default function App() {
               </div>
               <div className="chart-box">
                 <div className="chart-title">
-                  {isDay ? "Sales Mix" : "Daily Sales Mix"}
+                  Daily Sales Mix
                 </div>
                 <div className="chart-inner">
                   <CategoryBreakdown data={dash.categoryBreakdown} />
@@ -254,13 +214,13 @@ export default function App() {
             </div>
 
             <div className="sec-hdr">
-              {isDay ? "KPIs" : "Prior Day KPIs"}
+              Prior Day KPIs
               <span className="sec-sub">{fmtDateLong(dash.effectiveEnd)}</span>
             </div>
             <DailyKPITable data={dash.dailyKpis} />
 
             <div className="sec-hdr mt2">
-              {isDay ? "Sales Mix" : "Daily Sales Mix"}
+              Daily Sales Mix
             </div>
             <SalesMixTable data={dash.dailyMix} />
           </>
@@ -272,7 +232,7 @@ export default function App() {
             <div className="chart-row">
               <div className="chart-box">
                 <div className="chart-title">
-                  {isDay ? "Revenue vs Budget by Location" : "MTD Revenue vs Budget by Location"}
+                  MTD Revenue vs Budget by Location
                 </div>
                 <div className="chart-inner">
                   <LocationBarChart
@@ -288,7 +248,7 @@ export default function App() {
               </div>
               <div className="chart-box">
                 <div className="chart-title">
-                  {isDay ? "Sales Mix" : "MTD Sales Mix"}
+                  MTD Sales Mix
                 </div>
                 <div className="chart-inner">
                   <CategoryBreakdown data={dash.categoryBreakdown} />
@@ -297,18 +257,15 @@ export default function App() {
             </div>
 
             <div className="sec-hdr">
-              {isDay ? "Performance Summary" : "MTD Performance Summary"}
+              MTD Performance Summary
               <span className="sec-sub">
-                {isDay
-                  ? fmtDateLong(dash.effectiveEnd)
-                  : mtdLabel(dash.effectiveStart, dash.effectiveEnd)
-                }
+                {mtdLabel(dash.effectiveStart, dash.effectiveEnd)}
               </span>
             </div>
             <MTDSummaryTable data={dash.mtdSummary} />
 
             <div className="sec-hdr mt2">
-              {isDay ? "Sales Mix" : "MTD Sales Mix"}
+              MTD Sales Mix
             </div>
             <SalesMixTable data={dash.mtdMix} />
           </>

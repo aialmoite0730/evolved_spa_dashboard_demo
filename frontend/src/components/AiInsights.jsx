@@ -20,32 +20,20 @@ function signedPct(n) {
   const v = Number(n);
   return (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
 }
-// Distinguish a real zero from a missing value — important so Gemini doesn't
-// treat "0" as "no data" and invent a number to fill the gap.
 function valOrMissing(n, formatter) {
   if (n == null || isNaN(Number(n))) return "MISSING";
   return formatter(n);
 }
 
-// ── Check if the relevant tab's data is present ───────────────────────────────
-function hasData(tab, dash) {
-  if (tab === "daily")        return (dash.dailyKpis        || []).length > 0;
-  if (tab === "mtd")          return dash.kpiHeader?.mtd_revenue != null;
-  if (tab === "ops")          return (dash.operations        || []).length > 0;
-  if (tab === "appointments") return (dash.apptSummary       || []).length > 0;
-  if (tab === "scorecard")    return (dash.employeeScorecard || []).length > 0;
-  return false;
-}
-
-// ── Shared instructions for grounded, non-hallucinated analysis ────────────────
+// ── Shared grounding rules ────────────────────────────────────────────────────
 const GROUNDING_RULES =
   `RULES FOR THIS ANALYSIS:\n` +
   `- Only use the numbers given below. Do not invent, estimate, or assume any figure not explicitly provided.\n` +
   `- "MISSING" or "N/A" means the data point is genuinely unavailable — say so plainly or skip it. Do not guess a value.\n` +
-  `- "0" or "0%" is a real, reported value (e.g. zero no-shows, zero rebookings) — treat it as a true result, not as missing data.\n` +
-  `- Do not speculate about causes (e.g. weather, staffing changes, marketing campaigns, holidays) unless that cause is explicitly stated in the data.\n` +
-  `- When flagging an outlier (highest/lowest location, biggest variance, etc.), name the specific location and cite the specific number from the data.\n` +
-  `- Recommendations must be tied to a specific number you cited earlier in the response — no generic advice like "focus on customer retention" without the metric backing it.\n` +
+  `- "0" or "0%" is a real, reported value — treat it as a true result, not as missing data.\n` +
+  `- Do not speculate about causes unless explicitly stated in the data.\n` +
+  `- When flagging an outlier, name the specific location and cite the specific number.\n` +
+  `- Recommendations must be tied to a specific number cited earlier — no generic advice.\n` +
   `- Write in plain business English, short paragraphs, no bullet points, no markdown headers, no emojis.\n` +
   `- Max 110 words.\n`;
 
@@ -100,7 +88,6 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
 
   if (tab === "mtd") {
     const h = dash.kpiHeader || {};
-
     const header =
       `MTD Revenue (all selected locations): ${currency(h.mtd_revenue)}\n` +
       `Avg Daily Revenue (MTD): ${currency(h.avg_daily_revenue)}\n` +
@@ -120,19 +107,14 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
       `Gross Margin: ${pct(h.gross_margin_pct)}\n` +
       `Last Month Total Revenue: ${currency(h.last_month_revenue)}`;
 
-    // Per-location: surface the budget pacing numbers directly from mtd-summary
-    const rows = (dash.mtdSummary || []).map(r => {
-      const pctGoal = r.pct_to_goal_mtd;
-      const trendPctGoal = r.pct_to_goal_total;
-      return (
-        `  ${r.location}: MTD Sales ${currency(r.cash_sales)} of ${currency(r.monthly_budget)} budget ` +
-        `(${valOrMissing(pctGoal, v => pct(v))} to goal MTD, ` +
-        `trending to ${valOrMissing(trendPctGoal, v => pct(v))} of goal). ` +
-        `Surplus/Shortfall vs budget: ${r.surplus_shortfall != null ? currency(r.surplus_shortfall) : "MISSING"}. ` +
-        `WoW: ${signedPct(r.prior_week_variance_pct)}, vs Prior Month: ${signedPct(r.pm_variance_pct)}, vs Prior Year: ${signedPct(r.py_variance_pct)}. ` +
-        `Membership adoption: ${pct(r.membership_adoption)}.`
-      );
-    }).join("\n");
+    const rows = (dash.mtdSummary || []).map(r => (
+      `  ${r.location}: MTD Sales ${currency(r.cash_sales)} of ${currency(r.monthly_budget)} budget ` +
+      `(${valOrMissing(r.pct_to_goal_mtd, v => pct(v))} to goal MTD, ` +
+      `trending to ${valOrMissing(r.pct_to_goal_total, v => pct(v))} of goal). ` +
+      `Surplus/Shortfall vs budget: ${r.surplus_shortfall != null ? currency(r.surplus_shortfall) : "MISSING"}. ` +
+      `WoW: ${signedPct(r.prior_week_variance_pct)}, vs Prior Month: ${signedPct(r.pm_variance_pct)}, vs Prior Year: ${signedPct(r.py_variance_pct)}. ` +
+      `Membership adoption: ${pct(r.membership_adoption)}.`
+    )).join("\n");
 
     const mix = (dash.mtdMix || []).map(r => {
       const total = Number(r.total) || 0;
@@ -143,7 +125,7 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
 
     return base +
       `COMBINED KEY METRICS:\n${header}\n\n` +
-      `PER-LOCATION BUDGET PACING (this is the primary basis for location-level insights):\n${rows || "  No location data returned."}\n\n` +
+      `PER-LOCATION BUDGET PACING:\n${rows || "  No location data returned."}\n\n` +
       `SALES MIX % BY LOCATION:\n${mix || "  No mix data returned."}`;
   }
 
@@ -189,27 +171,33 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
 
     return base +
       `APPOINTMENT SUMMARY BY LOCATION:\n${rows || "  No data returned."}\n\n` +
-      `CANCELLATION REASONS (all locations, all reasons reported):\n${cancelTop}\n\n` +
-      `TOP SERVICE CATEGORIES (all locations):\n${catTop}\n\n` +
+      `CANCELLATION REASONS:\n${cancelTop}\n\n` +
+      `TOP SERVICE CATEGORIES:\n${catTop}\n\n` +
       `Focus on no-show/cancellation rates by location vs. the chain average implied above, the dominant cancellation reason, and rebooking-rate gaps.`;
   }
 
   if (tab === "scorecard") {
     const allProviders = (dash.employeeScorecard || []).filter(r => r.role === "Treatment Provider");
     const allEstis     = (dash.employeeScorecard || []).filter(r => r.role === "Esthetician");
-    const providers = allProviders.slice(0, 8);
-    const estis     = allEstis.slice(0, 8);
-    const fmt = r =>
+    const fmtRow = r =>
       `  ${r.name} (${r.center}): Utilization ${pct(r.utilization)}, Rev/Hr ${currency(r.rev_per_hr)}, MTD Revenue ${currency(r.total_revenue)}, Booked Hours ${valOrMissing(r.booked_hours, num)}, Scheduled Hours ${valOrMissing(r.scheduled_hours, num)}`;
 
     return base +
       `TARGETS — Treatment Providers: Utilization ≥75%, Rev/Hr ≥$550. Estheticians: Utilization ≥75%, Rev/Hr ≥$175.\n\n` +
-      `TREATMENT PROVIDERS (sorted by MTD revenue, showing top ${providers.length} of ${allProviders.length}):\n${providers.map(fmt).join("\n") || "  No data."}\n\n` +
-      `ESTHETICIANS (sorted by MTD revenue, showing top ${estis.length} of ${allEstis.length}):\n${estis.map(fmt).join("\n") || "  No data."}\n\n` +
+      `TREATMENT PROVIDERS (top ${Math.min(8, allProviders.length)} of ${allProviders.length}):\n${allProviders.slice(0, 8).map(fmtRow).join("\n") || "  No data."}\n\n` +
+      `ESTHETICIANS (top ${Math.min(8, allEstis.length)} of ${allEstis.length}):\n${allEstis.slice(0, 8).map(fmtRow).join("\n") || "  No data."}\n\n` +
       `Focus on individuals significantly above or below the utilization/rev-per-hour targets, and name them specifically.`;
   }
 
   return base + "No data available for this view.";
+}
+
+// ── Date display helper ───────────────────────────────────────────────────────
+function fmtShort(dateStr) {
+  if (!dateStr) return "";
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric",
+  });
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -219,11 +207,10 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
   const [insight,   setInsight]   = useState("");
   const [error,     setError]     = useState("");
 
-  const lastKeyRef     = useRef(null);
-  const pendingKeyRef  = useRef(null);
-  const mountedRef     = useRef(true);
-  const abortRef       = useRef(null);
-  // Tracks whether the first real data load has completed — AI never fires before this.
+  const lastKeyRef       = useRef(null);
+  const pendingKeyRef    = useRef(null);
+  const mountedRef       = useRef(true);
+  const abortRef         = useRef(null);
   const firstLoadDoneRef = useRef(false);
 
   useEffect(() => {
@@ -234,7 +221,7 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     };
   }, []);
 
-  // ── Generate via backend ────────────────────────────────────────────────
+  // ── Generate via backend ──────────────────────────────────────────────────
   const generate = useCallback(async () => {
     if (!mountedRef.current) return;
 
@@ -258,7 +245,7 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
           tab,
           prompt,
           view_mode:  dash.viewMode,
-          start_date: effectiveStart,
+          start_date: tab === "daily" ? effectiveEnd : effectiveStart,
           end_date:   effectiveEnd,
           locations:  dash.filters?.locations || [],
         }),
@@ -282,12 +269,15 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     setAiLoading(false);
   }, [tab, dash, effectiveStart, effectiveEnd]); // eslint-disable-line
 
-  // ── Auto-trigger: fires when tab/dates change, but NEVER on first load ───
+  // ── Auto-trigger: fires on tab/date changes, never on first load ──────────
   useEffect(() => {
-    // Block until the very first data load has finished.
     if (!firstLoadDoneRef.current) return;
 
-    const key = `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
+    // Daily KPIs only cares about the single day (effectiveEnd).
+    // All other tabs care about the full range (effectiveStart → effectiveEnd).
+    const key = tab === "daily"
+      ? `${tab}|${dash.viewMode}|${effectiveEnd}`
+      : `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
     setInsight("");
     setError("");
     if (lastKeyRef.current === key) return;
@@ -301,17 +291,18 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     }
   }, [tab, effectiveStart, effectiveEnd]); // eslint-disable-line
 
-  // ── Fire pending request once dashboard finishes loading ─────────────────
+  // ── Pick up pending request once dashboard finishes loading ───────────────
   useEffect(() => {
     if (dash.loading) return;
 
-    // Mark the first load as done — from this point auto-trigger is enabled.
     if (!firstLoadDoneRef.current) {
       firstLoadDoneRef.current = true;
       return;
     }
 
-    const key = `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
+    const key = tab === "daily"
+      ? `${tab}|${dash.viewMode}|${effectiveEnd}`
+      : `${tab}|${dash.viewMode}|${effectiveStart}|${effectiveEnd}`;
     if (pendingKeyRef.current !== key) return;
     if (lastKeyRef.current === key) return;
 
@@ -320,17 +311,26 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
     generate();
   }, [dash.loading]); // eslint-disable-line
 
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const tabLabel = {
+  // ── Derived display values ────────────────────────────────────────────────
+  const TAB_LABELS = {
     daily: "Daily KPIs", mtd: "MTD Performance", ops: "Operations",
     scorecard: "Employee Scorecard", appointments: "Appointments",
-  }[tab] || tab;
-
+  };
+  const tabLabel    = TAB_LABELS[tab] || tab;
+  const isDay       = dash.viewMode === "day";
   const dashLoading = dash.loading;
+
+  // Daily KPIs tab always analyzes a single day (effectiveEnd), regardless of view mode.
+  // All other tabs analyze the full MTD range.
+  const dateChip = (tab === "daily" || isDay)
+    ? fmtShort(effectiveEnd)
+    : `${fmtShort(effectiveStart)} – ${fmtShort(effectiveEnd)}`;
 
   return (
     <div className="ai-insights-wrap">
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+
+      {/* ── Trigger button + context chips ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button
           className="ai-insights-btn"
           onClick={() => open ? setOpen(false) : (insight ? setOpen(true) : generate())}
@@ -344,20 +344,38 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
             ? "▾ Hide Insights"
             : "✦ Show Insights"}
         </button>
+
+        {/* Context chip — only shown when panel is closed so user knows what was last analyzed */}
+        {!open && insight && (
+          <span style={{
+            padding: "3px 10px",
+            background: "#f4ecee",
+            color: "#8a6272",
+            fontSize: 9,
+            fontFamily: "'Josefin Sans', sans-serif",
+            fontWeight: 600,
+            letterSpacing: "0.1em",
+            textTransform: "uppercase",
+            lineHeight: 1.6,
+          }}>
+            {tabLabel} · {dateChip}
+          </span>
+        )}
       </div>
 
+      {/* ── Panel ── */}
       {open && (
         <div className="ai-insights-panel">
+
+          {/* Header */}
           <div className="ai-insights-header">
             <span className="ai-insights-title">✦ AI Insights</span>
-            <span className="ai-insights-meta">
-              {tabLabel} · {dash.viewMode === "day"
-                ? `Day · ${effectiveEnd}`
-                : `MTD · ${effectiveStart} → ${effectiveEnd}`}
-            </span>
+            <span className="ai-insights-meta">{tabLabel} · {dateChip}</span>
+
             <button className="ai-insights-close" onClick={() => setOpen(false)}>✕</button>
           </div>
 
+          {/* Loading: waiting for dashboard data */}
           {dashLoading && !aiLoading && (
             <div className="ai-insights-loading">
               <span className="ai-pulse">●</span>
@@ -367,12 +385,13 @@ export default function AiInsights({ tab, dash, effectiveStart, effectiveEnd }) 
             </div>
           )}
 
+          {/* Loading: AI analyzing */}
           {aiLoading && (
             <div className="ai-insights-loading">
               <span className="ai-pulse">●</span>
               <span className="ai-pulse" style={{ animationDelay: "0.2s" }}>●</span>
               <span className="ai-pulse" style={{ animationDelay: "0.4s" }}>●</span>
-              &nbsp; Analyzing data…
+              &nbsp; Analyzing {tabLabel}…
             </div>
           )}
 

@@ -2,17 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:8000";
 
-function today() { return new Date().toISOString().slice(0, 10); }
-function yesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
-function monthStart() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
 function qs(obj) {
   const p = new URLSearchParams();
   Object.entries(obj).forEach(([k, v]) => {
@@ -35,12 +24,8 @@ const DEBOUNCE_MS = 300;
 export function useDashboard() {
   const [viewMode, setViewMode] = useState("month");
 
-  const [filters, setFilters] = useState({
-    startDate: monthStart(),
-    endDate:   today(),
-    dayDate:   yesterday(),
-    locations: [],
-  });
+  // null until /api/latest-date resolves — prevents any data fetch with wrong dates
+  const [filters, setFilters] = useState(null);
 
   const [locations,         setLocations]         = useState([]);
   const [kpiHeader,         setKpiHeader]         = useState(null);
@@ -71,14 +56,31 @@ export function useDashboard() {
   const debounceTimer = useRef(null);
   const abortCtrl     = useRef(null);
 
+  // ── On mount: resolve latest data date + locations in one shot ─────────────
+  // This is the ONLY place locations and the initial date are fetched.
+  // filters stays null until this resolves, which blocks all data fetches.
   useEffect(() => {
-    fetchJSON("/api/locations")
-      .then(setLocations)
+    Promise.all([
+      fetchJSON("/api/latest-date"),
+      fetchJSON("/api/locations"),
+    ])
+      .then(([dateRes, locs]) => {
+        const latest = dateRes.latest_date;          // e.g. "2026-06-13"
+        const start  = latest.slice(0, 7) + "-01";  // e.g. "2026-06-01"
+        setLocations(locs);
+        setFilters({
+          startDate: start,
+          endDate:   latest,
+          dayDate:   latest,
+          locations: [],
+        });
+      })
       .catch(e => setError(e.message));
   }, []);
 
-  // Core fetch — called after debounce settles. Receives a stable snapshot of
-  // filters + viewMode so it doesn't need them as deps (avoids stale closure issues).
+  // ── Core fetch ─────────────────────────────────────────────────────────────
+  // Called after debounce settles. Receives a stable snapshot of filters +
+  // viewMode so it doesn't need them as deps (avoids stale closure issues).
   const fetchAll = useCallback(async (snapshot, signal) => {
     const { filters: f, viewMode: vm } = snapshot;
 
@@ -88,7 +90,7 @@ export function useDashboard() {
     const effectiveStart = vm === "day" ? f.dayDate : f.startDate;
     const effectiveEnd   = vm === "day" ? f.dayDate : f.endDate;
 
-    const dateQ = qs({ date: effectiveEnd,                           ...locArg });
+    const dateQ = qs({ date: effectiveEnd,                                ...locArg });
     const mtdQ  = qs({ start_date: effectiveStart, end_date: effectiveEnd, ...locArg });
 
     const [
@@ -144,21 +146,21 @@ export function useDashboard() {
     setApptRequestType(aRequestType);
   }, []);
 
-  // Debounced refresh — cancels the previous in-flight batch, waits DEBOUNCE_MS,
-  // then fires a fresh batch with the latest filter snapshot.
+  // ── Debounced refresh ──────────────────────────────────────────────────────
+  // Guards against null filters (before /api/latest-date resolves).
+  // Cancels previous in-flight batch, waits DEBOUNCE_MS, fires fresh batch.
   const refresh = useCallback(() => {
-    // Cancel any pending debounce timer
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    // Don't fire until the initial date resolution has completed
+    if (!filters) return;
 
-    // Abort any in-flight requests from the previous batch
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
     if (abortCtrl.current) abortCtrl.current.abort();
 
     debounceTimer.current = setTimeout(() => {
       const controller = new AbortController();
       abortCtrl.current = controller;
 
-      // Capture a snapshot of current state at the moment the timer fires.
-      // Using a functional-style setState read via a ref to avoid stale closure.
+      // Read current state at the moment the timer fires to avoid stale closures.
       setFilters(currentFilters => {
         setViewMode(currentViewMode => {
           setLoading(true);
@@ -171,18 +173,18 @@ export function useDashboard() {
             })
             .finally(() => setLoading(false));
 
-          // Return the same values — we're just reading, not updating.
           return currentViewMode;
         });
         return currentFilters;
       });
     }, DEBOUNCE_MS);
-  }, [fetchAll]);
+  }, [filters, fetchAll]);
 
-  // Re-run whenever filters or viewMode change
+  // Re-run whenever filters or viewMode change.
+  // The null guard in refresh() ensures this is a no-op until filters are ready.
   useEffect(() => {
+    if (!filters) return;
     refresh();
-    // Cleanup: cancel timer + abort on unmount or before next run
     return () => {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       if (abortCtrl.current)     abortCtrl.current.abort();
@@ -191,10 +193,9 @@ export function useDashboard() {
 
   // ── Filter helpers ─────────────────────────────────────────────────────────
 
-  // Accepts a single key update. When startDate changes and would exceed endDate,
-  // both are updated in ONE setFilters call — preventing a double fetch.
   function updateFilter(key, val) {
     setFilters(f => {
+      if (!f) return f;
       if (key === "startDate") {
         const newEndDate = val > f.endDate ? val : f.endDate;
         return { ...f, startDate: val, endDate: newEndDate };
@@ -203,14 +204,13 @@ export function useDashboard() {
     });
   }
 
-  // Convenience: update both dates atomically in one state update.
-  // Use this from any component that changes both start and end at once.
   function updateDateRange(start, end) {
-    setFilters(f => ({ ...f, startDate: start, endDate: end }));
+    setFilters(f => f ? { ...f, startDate: start, endDate: end } : f);
   }
 
   function toggleLocation(loc) {
     setFilters(f => {
+      if (!f) return f;
       const locs = f.locations.includes(loc)
         ? f.locations.filter(l => l !== loc)
         : [...f.locations, loc];
@@ -218,8 +218,14 @@ export function useDashboard() {
     });
   }
 
-  const effectiveStart = viewMode === "day" ? filters.dayDate : filters.startDate;
-  const effectiveEnd   = viewMode === "day" ? filters.dayDate : filters.endDate;
+  // Safe derived dates — empty string when filters not yet loaded,
+  // so App.js date display shows nothing rather than crashing.
+  const effectiveStart = filters
+    ? (viewMode === "day" ? filters.dayDate : filters.startDate)
+    : "";
+  const effectiveEnd = filters
+    ? (viewMode === "day" ? filters.dayDate : filters.endDate)
+    : "";
 
   return {
     viewMode, setViewMode,

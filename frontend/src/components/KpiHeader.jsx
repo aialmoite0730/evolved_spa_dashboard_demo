@@ -26,7 +26,7 @@ function Tile({ label, val, sub, subClass, tileClass, placeholder }) {
   );
 }
 
-export default function KpiHeader({ data, viewMode = "month" }) {
+export default function KpiHeader({ data }) {
   if (!data) {
     return (
       <div className="tiles">
@@ -146,13 +146,9 @@ export default function KpiHeader({ data, viewMode = "month" }) {
           tileClass={yoyGood ? "good" : "bad"}
         />
         <Tile
-          label={viewMode === "month" ? "Last Month Revenue" : "Yesterday Revenue"}
-          val={viewMode === "month"
-            ? fmtCur(data.last_month_revenue)
-            : fmtCur(data.yesterday_revenue)}
-          sub={viewMode === "month"
-            ? (data.last_month_clients != null ? `${fmtNum(data.last_month_clients)} clients` : undefined)
-            : yestSub}
+          label="Yesterday Revenue"
+          val={fmtCur(data.yesterday_revenue)}
+          sub={yestSub}
         />
         <Tile
           label="Total Customer Count"
@@ -182,8 +178,16 @@ export default function KpiHeader({ data, viewMode = "month" }) {
           val={fmtCur(data.blended_asp)}
           sub="excl. memberships"
         />
-        <Tile label="ASP — New Clients"      val="—" sub="requires segmented Zenoti data" placeholder />
-        <Tile label="ASP — Existing Clients" val="—" sub="requires segmented Zenoti data" placeholder />
+        <Tile
+          label="ASP — New Clients"
+          val={fmtCur(data.asp_new_clients)}
+          sub="MTD · excl. memberships"
+        />
+        <Tile
+          label="ASP — Existing Clients"
+          val={fmtCur(data.asp_existing_clients)}
+          sub="MTD · excl. memberships"
+        />
         <Tile
           label="Prebook Rate"
           val={data.rebooking_rate != null ? fmtPct(data.rebooking_rate) : "—"}
