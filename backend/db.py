@@ -1,18 +1,31 @@
 from datetime import date, datetime
 from typing import Optional
-from google.cloud import bigquery
-from config import BQ_CLIENT
+import pymssql
+
+from config import get_sql_connection, return_sql_connection
 
 
 def run_query(sql: str, params: Optional[list] = None) -> list[dict]:
     """
-    Execute a parameterised BigQuery SQL string and return rows as plain dicts.
-    Raises on any BigQuery error — callers (routers) catch and log via errors.py.
+    Execute a parameterised SQL Server query and return rows as plain dicts.
+    Raises on any SQL Server error — callers (routers) catch and log via errors.py.
     """
-    job_config = bigquery.QueryJobConfig(query_parameters=params or [])
-    job  = BQ_CLIENT.query(sql, job_config=job_config)
-    rows = job.result()
-    return [dict(row) for row in rows]
+    conn = get_sql_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows if rows else []
+    except pymssql.DatabaseError as e:
+        raise RuntimeError(f"SQL Server query error: {e}") from e
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error executing query: {e}") from e
+    finally:
+        return_sql_connection(conn)
 
 
 def serialize_rows(rows: list[dict]) -> list[dict]:

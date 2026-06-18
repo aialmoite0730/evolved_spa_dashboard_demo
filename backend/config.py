@@ -2,14 +2,71 @@ import os
 import json
 import base64
 import tempfile
+import threading
 from dotenv import load_dotenv
 from google.cloud import bigquery
+import pymssql
 
 load_dotenv()
 
 
-# ─── Credentials ──────────────────────────────────────────────────────────────
-def _setup_credentials() -> None:
+# ─── SQL Server Connection (main data tables) ─────────────────────────────────
+SQL_SERVER_HOST     = os.getenv("SQL_SERVER_HOST", "")
+SQL_SERVER_PORT     = int(os.getenv("SQL_SERVER_PORT", "1433"))
+SQL_SERVER_USER     = os.getenv("SQL_SERVER_USER", "")
+SQL_SERVER_PASSWORD = os.getenv("SQL_SERVER_PASSWORD", "")
+SQL_SERVER_DATABASE = os.getenv("SQL_SERVER_DATABASE", "evolve_spa")
+
+_connection_lock = threading.Lock()
+_connection_pool = []
+
+
+def get_sql_connection():
+    """Get a connection from the pool or create a new one."""
+    global _connection_pool
+    with _connection_lock:
+        if _connection_pool:
+            try:
+                conn = _connection_pool.pop()
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                return conn
+            except Exception:
+                pass
+
+    try:
+        conn = pymssql.connect(
+            server=SQL_SERVER_HOST,
+            port=SQL_SERVER_PORT,
+            user=SQL_SERVER_USER,
+            password=SQL_SERVER_PASSWORD,
+            database=SQL_SERVER_DATABASE,
+            timeout=10,
+            charset='UTF-8'
+        )
+        print(f"✅ Connected to SQL Server: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
+        return conn
+    except pymssql.DatabaseError as exc:
+        raise RuntimeError(f"Failed to connect to SQL Server: {exc}") from exc
+
+
+def return_sql_connection(conn):
+    """Return a connection to the pool."""
+    global _connection_pool
+    try:
+        with _connection_lock:
+            if len(_connection_pool) < 5:
+                _connection_pool.append(conn)
+            else:
+                conn.close()
+    except Exception:
+        pass
+
+
+# ─── BigQuery Credentials (api_log, insights, error tables only) ──────────────
+def _setup_credentials() -> bool:
+    """Returns True if credentials were found, False otherwise (non-fatal)."""
     creds_b64  = os.getenv("BIGQUERY_CREDENTIALS_BASE64")
     creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
@@ -21,50 +78,55 @@ def _setup_credentials() -> None:
             tmp.write(json.dumps(creds_dict))
             tmp.close()
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
-            print(f"✅ Credentials loaded from Base64 → {tmp.name}")
-            return
+            print(f"✅ BQ credentials loaded from Base64 → {tmp.name}")
+            return True
         except Exception as exc:
-            raise RuntimeError(f"Failed to decode BIGQUERY_CREDENTIALS_BASE64: {exc}") from exc
+            print(f"⚠️  Failed to decode BIGQUERY_CREDENTIALS_BASE64: {exc}")
+            return False
 
     if creds_path:
         if os.path.exists(creds_path):
-            print(f"✅ Credentials loaded from file → {creds_path}")
-            return
-        raise FileNotFoundError(f"Credentials file not found: {creds_path}")
+            print(f"✅ BQ credentials loaded from file → {creds_path}")
+            return True
+        print(f"⚠️  BQ credentials file not found: {creds_path}")
+        return False
 
-    raise EnvironmentError(
-        "No Google Cloud credentials found. "
-        "Set GOOGLE_APPLICATION_CREDENTIALS or BIGQUERY_CREDENTIALS_BASE64."
-    )
-
-
-_setup_credentials()
+    print("⚠️  No BQ credentials found — insights/api_log features will be unavailable.")
+    return False
 
 
-# ─── BigQuery client (singleton) ──────────────────────────────────────────────
-BQ_CLIENT: bigquery.Client = bigquery.Client()
+_BQ_AVAILABLE = _setup_credentials()
+try:
+    BQ_CLIENT: bigquery.Client = bigquery.Client() if _BQ_AVAILABLE else None
+except Exception as _bq_exc:
+    print(f"⚠️  Could not create BigQuery client: {_bq_exc}")
+    BQ_CLIENT = None
 
 
-# ─── Table identifiers ────────────────────────────────────────────────────────
-PROJECT_ID     = os.getenv("BIGQUERY_PROJECT_ID",       "your-project-id")
-DATASET        = os.getenv("BIGQUERY_DATASET",          "your_dataset")
-SALES_TABLE    = os.getenv("BIGQUERY_TABLE",            "sales_accrual")
-SCHEDULE_TABLE = os.getenv("BIGQUERY_SCHEDULE_TABLE",   "employee_schedule")
-APPT_TABLE     = os.getenv("BIGQUERY_APPT_TABLE",       "appointments")
-ERROR_TABLE    = os.getenv("BIGQUERY_ERROR_TABLE",      "api_error_log")
-API_LOG_TABLE  = os.getenv("BIGQUERY_API_LOG_TABLE",    "api_log")
-INSIGHTS_TABLE = os.getenv("BIGQUERY_INSIGHTS_TABLE",   "ai_insights_log")
+# ─── SQL Server table identifiers ─────────────────────────────────────────────
+SALES_TABLE    = os.getenv("SQL_SALES_TABLE",    "dbo.sales_accrual")
+SCHEDULE_TABLE = os.getenv("SQL_SCHEDULE_TABLE", "dbo.employee_schedule")
+APPT_TABLE     = os.getenv("SQL_APPT_TABLE",     "dbo.appointments")
 
-# Fully-qualified backtick references — for use inside SQL f-strings only
-FULL_SALES     = f"`{PROJECT_ID}.{DATASET}.{SALES_TABLE}`"
-FULL_SCHEDULE  = f"`{PROJECT_ID}.{DATASET}.{SCHEDULE_TABLE}`"
-FULL_APPT      = f"`{PROJECT_ID}.{DATASET}.{APPT_TABLE}`"
+# Aliases used by routers — plain table names work for SQL Server
+FULL_SALES    = SALES_TABLE
+FULL_SCHEDULE = SCHEDULE_TABLE
+FULL_APPT     = APPT_TABLE
+
+
+# ─── BigQuery table identifiers (api_log, insights, errors) ───────────────────
+PROJECT_ID     = os.getenv("BIGQUERY_PROJECT_ID", "your-project-id")
+DATASET        = os.getenv("BIGQUERY_DATASET",    "your_dataset")
+ERROR_TABLE    = os.getenv("BQ_ERROR_TABLE",      "api_errors")
+API_LOG_TABLE  = os.getenv("BQ_API_LOG_TABLE",    "api_log")
+INSIGHTS_TABLE = os.getenv("BQ_INSIGHTS_TABLE",   "ai_insights_log")
+
+# Backtick-quoted for BigQuery SQL queries
 FULL_ERRORS    = f"`{PROJECT_ID}.{DATASET}.{ERROR_TABLE}`"
 FULL_API_LOG   = f"`{PROJECT_ID}.{DATASET}.{API_LOG_TABLE}`"
 FULL_INSIGHTS  = f"`{PROJECT_ID}.{DATASET}.{INSIGHTS_TABLE}`"
 
-# Plain dotted references — for BigQuery streaming inserts (insert_rows_json)
-# insert_rows_json does NOT accept backtick-quoted strings.
+# Plain dotted for BigQuery streaming inserts (insert_rows_json)
 PLAIN_API_LOG  = f"{PROJECT_ID}.{DATASET}.{API_LOG_TABLE}"
 PLAIN_INSIGHTS = f"{PROJECT_ID}.{DATASET}.{INSIGHTS_TABLE}"
 PLAIN_ERRORS   = f"{PROJECT_ID}.{DATASET}.{ERROR_TABLE}"

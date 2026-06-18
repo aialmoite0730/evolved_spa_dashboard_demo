@@ -11,10 +11,10 @@ Responsibilities:
   4. Expose /health.
 
 Everything else lives in:
-  config.py          ← credentials + BQ client + table refs
+  config.py          ← SQL Server connection pool + table references
   db.py              ← run_query, serialize_rows
   utils/filters.py   ← WHERE-clause builders
-  utils/errors.py    ← structured error logger → BigQuery
+  utils/errors.py    ← structured error logger → SQL Server
   routers/
     locations.py     ← GET /api/locations
     daily.py         ← GET /api/daily-kpis, /api/daily-sales-mix
@@ -23,12 +23,14 @@ Everything else lives in:
     employees.py     ← GET /api/employee-utilization, /api/employee-rph, /api/employee-scorecard
     charts.py        ← GET /api/category-breakdown, /api/revenue-trend
     insights.py      ← POST /api/insights
+
+✅ SWITCHED FROM BIGQUERY TO SQL SERVER
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Import triggers config.py → credential setup + BQ client init
+# Import triggers config.py → SQL Server connection pool init
 import config  # noqa: F401  (side-effect import)
 
 from routers import locations, daily, mtd, operations, employees, charts, appointments, insights

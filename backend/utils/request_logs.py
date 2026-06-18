@@ -1,14 +1,14 @@
 """
-Combined request + error logging.
+Combined request + error logging using BigQuery streaming inserts.
 
-A single BigQuery table — api_log — holds one row per request. Most rows
-have NULL error_type/error_message/traceback. When a router calls
-log_and_raise_from_request() (utils/errors.py), the error details are
-stashed on request.state and folded into that same row by the middleware
-below, so request + error info never need to be joined across tables.
+A single BigQuery table — api_log — holds one row per request. Most rows have
+NULL error_type/error_message/traceback. When a router calls
+log_and_raise_from_request() (utils/errors.py), the error details are stashed
+on request.state and folded into that same row by the middleware below, so
+request + error info never need to be joined across tables.
 
-api_log schema (auto-created if table doesn't exist):
-  request_id    STRING    — UUID v4, generated at the start of the request.
+api_log schema (auto-created if missing):
+  request_id    STRING    — UUID v4, generated at the start of the request
   timestamp     TIMESTAMP — when the request was received (UTC)
   endpoint      STRING    — request path, e.g. "/api/daily-kpis"
   method        STRING    — HTTP method
@@ -33,14 +33,12 @@ import threading
 from datetime import datetime, timezone
 
 from google.cloud import bigquery
+from config import BQ_CLIENT, PROJECT_ID, DATASET, API_LOG_TABLE, FULL_API_LOG, PLAIN_API_LOG
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from config import BQ_CLIENT, PROJECT_ID, DATASET, API_LOG_TABLE, FULL_API_LOG, PLAIN_API_LOG
-
 _ENV = os.getenv("APP_ENV", "production")
 
-# ─── BigQuery schema ───────────────────────────────────────────────────────────
 _API_LOG_SCHEMA = [
     bigquery.SchemaField("request_id",    "STRING",    mode="REQUIRED"),
     bigquery.SchemaField("timestamp",     "TIMESTAMP", mode="REQUIRED"),
@@ -57,7 +55,7 @@ _API_LOG_SCHEMA = [
 
 
 def _ensure_api_log_table() -> None:
-    """Create the api_log table if it doesn't already exist."""
+    """Create the api_log table in BigQuery if it doesn't already exist."""
     dataset_ref = BQ_CLIENT.dataset(DATASET, project=PROJECT_ID)
     table_ref   = dataset_ref.table(API_LOG_TABLE)
     try:
@@ -79,11 +77,7 @@ _ensure_api_log_table()
 
 
 def insert_log_row(row: dict) -> None:
-    """
-    Write a single row to api_log via BigQuery streaming insert.
-    Uses PLAIN_API_LOG (no backticks) — insert_rows_json requires a plain
-    'project.dataset.table' string, not the backtick-quoted SQL form.
-    """
+    """Write a single row to api_log via BigQuery streaming insert."""
     try:
         errors = BQ_CLIENT.insert_rows_json(PLAIN_API_LOG, [row])
         if errors:

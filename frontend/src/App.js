@@ -65,6 +65,7 @@ export default function App() {
   const dash = useDashboard();
   const [tab, setTab] = useState("daily");
   const topOffset = useTopOffset();
+  const isDay = dash.viewMode === "day";
 
   const locCount       = dash.locations.length;
   const activeLocCount = dash.filters?.locations?.length ?? 0;

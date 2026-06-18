@@ -63,3 +63,7 @@ yarn-error.log*
 # Testing
 coverage/
 .nyc_output/
+
+# Scripts and Schemas
+backend/scripts/
+backend/msql_schema

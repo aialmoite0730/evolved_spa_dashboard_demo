@@ -25,12 +25,7 @@ def get_category_breakdown(
         s = start_date or str(today.replace(day=1))
         where, params = build_date_filter(s, e, locations)
 
-        # Append the category guard without adding a second WHERE keyword
-        cat_guard = (
-            "AND item_category IS NOT NULL"
-            if where
-            else "WHERE item_category IS NOT NULL"
-        )
+        cat_guard = "AND item_category IS NOT NULL" if where else "WHERE item_category IS NOT NULL"
 
         sql = f"""
         SELECT
@@ -43,7 +38,7 @@ def get_category_breakdown(
         GROUP BY item_category
         ORDER BY revenue DESC
         """
-        return run_query(sql, params)
+        return run_query(sql, params or None)
 
     except Exception as exc:
         log_and_raise_from_request(exc, request)
@@ -65,15 +60,15 @@ def get_revenue_trend(
 
         sql = f"""
         SELECT
-            DATE(sale_date)            AS sale_date,
+            CAST(sale_date AS DATE)    AS sale_date,
             SUM(sales_exc_tax)         AS daily_revenue,
             COUNT(DISTINCT invoice_id) AS appointments
         FROM {FULL_SALES}
         {where}
-        GROUP BY DATE(sale_date)
+        GROUP BY CAST(sale_date AS DATE)
         ORDER BY sale_date
         """
-        return serialize_rows(run_query(sql, params))
+        return serialize_rows(run_query(sql, params or None))
 
     except Exception as exc:
         log_and_raise_from_request(exc, request)
