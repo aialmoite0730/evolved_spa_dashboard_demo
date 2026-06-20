@@ -119,12 +119,10 @@ FULL_CASH     = CASH_TABLE
 # ─── BigQuery table identifiers (api_log, insights, errors) ───────────────────
 PROJECT_ID     = os.getenv("BIGQUERY_PROJECT_ID", "your-project-id")
 DATASET        = os.getenv("BIGQUERY_DATASET",    "your_dataset")
-ERROR_TABLE    = os.getenv("BQ_ERROR_TABLE",      "api_errors")
-API_LOG_TABLE  = os.getenv("BQ_API_LOG_TABLE",    "api_log")
-INSIGHTS_TABLE = os.getenv("BQ_INSIGHTS_TABLE",   "ai_insights_log")
+API_LOG_TABLE  = os.getenv("BIGQUERY_API_LOG_TABLE",  "api_log")
+INSIGHTS_TABLE = os.getenv("BIGQUERY_INSIGHTS_TABLE", "ai_insights_log")
 
 # Backtick-quoted for BigQuery SQL queries
-FULL_ERRORS    = f"`{PROJECT_ID}.{DATASET}.{ERROR_TABLE}`"
 FULL_API_LOG   = f"`{PROJECT_ID}.{DATASET}.{API_LOG_TABLE}`"
 FULL_INSIGHTS  = f"`{PROJECT_ID}.{DATASET}.{INSIGHTS_TABLE}`"
 

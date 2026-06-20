@@ -31,7 +31,6 @@ ai_insights_log schema (auto-created if missing):
   insight     STRING
   provider    STRING    — "openai" | "gemini"
   created_at  TIMESTAMP
-  environment STRING
 """
 
 import os
@@ -51,9 +50,6 @@ from utils.errors import log_and_raise_from_request
 
 router = APIRouter()
 
-_ENV = os.getenv("APP_ENV", "production")
-
-
 # ─── AI provider config ────────────────────────────────────────────────────────
 OPENAI_URL   = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = "gpt-4o-mini"
@@ -65,24 +61,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CACHE_TTL_MINUTES = int(os.getenv("AI_INSIGHTS_CACHE_TTL_MINUTES", "60"))
 
 AI_TIMEOUT_SECONDS = 30.0
-
-# ─── Debug logging ──────────────────────────────────────────────────────────────
-# Prints diagnostics for every /api/insights call. Set AI_INSIGHTS_DEBUG=0 to
-# silence (it's on by default since this endpoint is easy to misconfigure —
-# missing/invalid API keys, BQ permission issues, etc.).
-DEBUG = os.getenv("AI_INSIGHTS_DEBUG", "1") != "0"
-
-
-def _debug(msg: str) -> None:
-    if DEBUG:
-        print(f"🔍 [insights] {msg}")
-
-
-_debug(
-    f"startup — OPENAI_API_KEY={'set (' + OPENAI_API_KEY[:4] + '...)' if OPENAI_API_KEY else 'NOT SET'}, "
-    f"GEMINI_API_KEY={'set (' + GEMINI_API_KEY[:4] + '...)' if GEMINI_API_KEY else 'NOT SET'}, "
-    f"cache_table={FULL_INSIGHTS}, ttl={CACHE_TTL_MINUTES}min"
-)
 
 
 # ─── BigQuery schema for the insights cache table ──────────────────────────────
@@ -97,7 +75,6 @@ _INSIGHTS_SCHEMA = [
     bigquery.SchemaField("insight",     "STRING",    mode="NULLABLE"),
     bigquery.SchemaField("provider",    "STRING",    mode="NULLABLE"),
     bigquery.SchemaField("created_at",  "TIMESTAMP", mode="REQUIRED"),
-    bigquery.SchemaField("environment", "STRING",    mode="NULLABLE"),
 ]
 
 
@@ -160,18 +137,13 @@ def _get_cached(cache_key: str) -> Optional[dict]:
     )
     try:
         rows = list(BQ_CLIENT.query(query, job_config=job_config).result())
-    except Exception as exc:
-        # Cache lookup failures shouldn't break insight generation — log and
-        # fall through to a cache miss.
-        _debug(f"cache lookup FAILED ({exc!r}) — treating as cache miss")
+    except Exception:
         return None
 
     if not rows:
-        _debug(f"cache MISS for {cache_key[:12]}...")
         return None
 
     row = rows[0]
-    _debug(f"cache HIT for {cache_key[:12]}... (provider={row.provider}, created_at={row.created_at})")
     return {"insight": row.insight, "provider": row.provider}
 
 
@@ -181,8 +153,6 @@ def _insert_insight_row(row: dict) -> None:
         errors = BQ_CLIENT.insert_rows_json(PLAIN_INSIGHTS, [row])
         if errors:
             print(f"⚠️  AI insights cache insert failed: {errors}")
-        else:
-            _debug(f"cached insight saved (cache_key={row['cache_key'][:12]}..., provider={row['provider']})")
     except Exception as exc:
         print(f"⚠️  Could not write to AI insights cache: {exc}")
 
@@ -199,7 +169,6 @@ def _save_insight(payload: InsightRequest, cache_key: str, insight: str, provide
         "insight":     insight,
         "provider":    provider,
         "created_at":  datetime.now(timezone.utc).isoformat(),
-        "environment": _ENV,
     }
     thread = threading.Thread(target=_insert_insight_row, args=(row,), daemon=True)
     thread.start()
@@ -207,7 +176,6 @@ def _save_insight(payload: InsightRequest, cache_key: str, insight: str, provide
 
 # ─── AI provider calls ──────────────────────────────────────────────────────────
 async def _call_openai(prompt: str) -> str:
-    _debug(f"calling OpenAI ({OPENAI_MODEL}) — prompt length={len(prompt)} chars")
     async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         res = await client.post(
             OPENAI_URL,
@@ -223,26 +191,20 @@ async def _call_openai(prompt: str) -> str:
             },
         )
 
-    _debug(f"OpenAI responded with HTTP {res.status_code}")
-
     if res.status_code != 200:
         try:
             err = res.json()
         except Exception:
             err = {}
-        _debug(f"OpenAI error body: {err}")
         if res.status_code == 429:
             raise RuntimeError("OpenAI rate limit reached.")
         raise RuntimeError(err.get("error", {}).get("message") or f"OpenAI HTTP {res.status_code}")
 
     data = res.json()
-    text = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
-    _debug(f"OpenAI returned {len(text)} chars")
-    return text
+    return (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
 
 
 async def _call_gemini(prompt: str) -> str:
-    _debug(f"calling Gemini (fallback) — prompt length={len(prompt)} chars")
     async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
         res = await client.post(
             GEMINI_URL,
@@ -256,23 +218,18 @@ async def _call_gemini(prompt: str) -> str:
             },
         )
 
-    _debug(f"Gemini responded with HTTP {res.status_code}")
-
     if res.status_code != 200:
         try:
             err = res.json()
         except Exception:
             err = {}
-        _debug(f"Gemini error body: {err}")
         if res.status_code == 429:
             raise RuntimeError("Gemini rate limit reached.")
         raise RuntimeError(err.get("error", {}).get("message") or f"Gemini HTTP {res.status_code}")
 
     data = res.json()
     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
-    text = (parts[0].get("text") or "").strip()
-    _debug(f"Gemini returned {len(text)} chars")
-    return text
+    return (parts[0].get("text") or "").strip()
 
 
 # ─── Route ────────────────────────────────────────────────────────────────────
@@ -282,18 +239,10 @@ async def get_insight(payload: InsightRequest, request: Request):
     Returns: { "insight": str, "provider": "openai"|"gemini", "cached": bool }
     """
     try:
-        _debug(
-            f"request received — tab={payload.tab}, view_mode={payload.view_mode}, "
-            f"dates={payload.start_date}..{payload.end_date}, "
-            f"locations={payload.locations}, prompt_length={len(payload.prompt)}"
-        )
-
         cache_key = _cache_key(payload.tab, payload.prompt)
-        _debug(f"cache_key={cache_key[:12]}...")
 
         cached = _get_cached(cache_key)
         if cached:
-            _debug(f"returning cached result (provider={cached.get('provider')})")
             return {**cached, "cached": True}
 
         if not OPENAI_API_KEY and not GEMINI_API_KEY:
@@ -310,10 +259,7 @@ async def get_insight(payload: InsightRequest, request: Request):
                 text = await _call_openai(payload.prompt)
                 provider = "openai"
             except Exception as exc:
-                _debug(f"OpenAI FAILED: {exc!r}")
                 last_err = exc
-        else:
-            _debug("OPENAI_API_KEY not set — skipping primary provider")
 
         # Gemini is only used as a fallback if OpenAI is unconfigured or failed.
         if not text and GEMINI_API_KEY:
@@ -322,20 +268,14 @@ async def get_insight(payload: InsightRequest, request: Request):
                 provider = "gemini"
                 last_err = None  # Gemini succeeded — clear the OpenAI error
             except Exception as exc:
-                _debug(f"Gemini FAILED: {exc!r}")
                 last_err = exc
-        elif not text:
-            _debug("GEMINI_API_KEY not set — no fallback available")
 
         if not text:
-            _debug(f"both providers failed/unavailable — raising: {last_err!r}")
             raise last_err or RuntimeError("AI provider returned an empty response.")
 
-        _debug(f"success via {provider} — insight length={len(text)} chars")
         _save_insight(payload, cache_key, text, provider)
 
         return {"insight": text, "provider": provider, "cached": False}
 
     except Exception as exc:
-        _debug(f"request FAILED: {exc!r}")
         log_and_raise_from_request(exc, request)

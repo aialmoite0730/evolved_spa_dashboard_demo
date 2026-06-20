@@ -37,8 +37,6 @@ from config import BQ_CLIENT, PROJECT_ID, DATASET, API_LOG_TABLE, FULL_API_LOG, 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-_ENV = os.getenv("APP_ENV", "production")
-
 _API_LOG_SCHEMA = [
     bigquery.SchemaField("request_id",    "STRING",    mode="REQUIRED"),
     bigquery.SchemaField("timestamp",     "TIMESTAMP", mode="REQUIRED"),
@@ -116,7 +114,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "error_type":    error_info.get("error_type"),
                 "error_message": error_info.get("error_message"),
                 "traceback":     error_info.get("traceback"),
-                "environment":   _ENV,
+                "environment":   "production",
             }
             insert_log_row_async(row)
 
