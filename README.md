@@ -220,8 +220,6 @@ The response includes a `"cached": true/false` flag and the `provider` that gene
 
 The table is day-partitioned on `created_at`, clustered on `cache_key`, and auto-created on startup if it doesn't exist.
 
-**Debug logging** is enabled by default (`AI_INSIGHTS_DEBUG=1`). Set to `0` to silence.
-
 ---
 
 ## Employee Data Design
@@ -290,7 +288,6 @@ REACT_APP_API_URL=http://localhost:8000 npm start
 | `BIGQUERY_APPT_TABLE`            | ✅       | Appointments table name                                   |
 | `BIGQUERY_API_LOG_TABLE`         |          | Request log table name (default: `api_log`)               |
 | `BIGQUERY_INSIGHTS_TABLE`        |          | AI insights cache table name (default: `ai_insights_log`) |
-| `BIGQUERY_ERROR_TABLE`           |          | Legacy error log table name (default: `api_error_log`)    |
 | `GOOGLE_APPLICATION_CREDENTIALS` |          | Path to service account JSON file                         |
 | `BIGQUERY_CREDENTIALS_BASE64`    |          | Base64-encoded service account JSON (Railway-friendly)    |
 | `OPENAI_API_KEY`                 |          | OpenAI API key (primary AI provider)                      |
