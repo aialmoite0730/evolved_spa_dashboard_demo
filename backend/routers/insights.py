@@ -165,7 +165,6 @@ def _save_insight(payload: InsightRequest, cache_key: str, insight: str, provide
         "start_date":  payload.start_date,
         "end_date":    payload.end_date,
         "locations":   json.dumps(payload.locations or []),
-        "prompt":      payload.prompt,
         "insight":     insight,
         "provider":    provider,
         "created_at":  datetime.now(timezone.utc).isoformat(),

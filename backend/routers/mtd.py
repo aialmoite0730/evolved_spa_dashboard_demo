@@ -93,37 +93,42 @@ def get_mtd_kpi_header(
         y_loc,    y_loc_p    = loc_in(locations)
 
         sql = f"""
-        WITH mtd AS (
+        WITH guest_classification AS (
+            -- One row per guest_code: is_new=1 if ANY row in period has first_visit='yes'.
+            -- Ensures new+existing always partitions total exactly (no double-count).
             SELECT
-                SUM(sales_collected_exc_tax)                                                                  AS mtd_revenue,
-                SUM(sales_collected_exc_tax) * 1.0
-                    / NULLIF(COUNT(DISTINCT CAST(payment_date AS DATE)), 0)                                   AS avg_daily_revenue,
-                COUNT(DISTINCT guest_code)                                                                     AS total_client_count,
-                -- new + existing must partition total_client_count exactly: every
-                -- distinct guest is either first_visit='yes' or first_visit='no'.
-                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'yes' THEN guest_code END)                      AS new_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'no'  THEN guest_code END)                      AS existing_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(member) = 'yes'      THEN guest_code END)                      AS member_count,
-                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_code END)                   AS new_members,
-                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_code END) * 1.0
-                    / NULLIF(COUNT(DISTINCT guest_code), 0) * 100                                              AS membership_adoption_rate,
-                SUM(CASE WHEN item_category != 'Memberships' THEN sales_collected_exc_tax ELSE 0 END) * 1.0
-                    / NULLIF(COUNT(DISTINCT CASE WHEN item_category != 'Memberships'
-                                                  THEN invoice_no END), 0)                                     AS blended_asp,
-                -- ASP for new/existing clients is revenue / UNIQUE CUSTOMER count,
-                -- not revenue / invoice count. A client with 2 invoices in the
-                -- period should still count once in the denominator.
-                SUM(CASE WHEN LOWER(first_visit) = 'yes' AND item_category != 'Memberships'
-                          THEN sales_collected_exc_tax ELSE 0 END) * 1.0
-                    / NULLIF(COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'yes'
-                                                  AND item_category != 'Memberships'
-                                                  THEN guest_code END), 0)                                     AS asp_new_clients,
-                SUM(CASE WHEN LOWER(first_visit) = 'no' AND item_category != 'Memberships'
-                          THEN sales_collected_exc_tax ELSE 0 END) * 1.0
-                    / NULLIF(COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'no'
-                                                  AND item_category != 'Memberships'
-                                                  THEN guest_code END), 0)                                     AS asp_existing_clients
+                guest_code,
+                MAX(CASE WHEN LOWER(first_visit) = 'yes' THEN 1 ELSE 0 END) AS is_new
             FROM {FULL_CASH}
+            {where}
+            GROUP BY guest_code
+        ),
+        mtd AS (
+            SELECT
+                SUM(c.sales_collected_exc_tax)                                                                AS mtd_revenue,
+                SUM(c.sales_collected_exc_tax) * 1.0
+                    / NULLIF(COUNT(DISTINCT CAST(c.payment_date AS DATE)), 0)                                 AS avg_daily_revenue,
+                COUNT(DISTINCT c.guest_code)                                                                   AS total_client_count,
+                COUNT(DISTINCT CASE WHEN gc.is_new = 1 THEN c.guest_code END)                                 AS new_client_count,
+                COUNT(DISTINCT CASE WHEN gc.is_new = 0 THEN c.guest_code END)                                 AS existing_client_count,
+                COUNT(DISTINCT CASE WHEN LOWER(c.member) = 'yes'        THEN c.guest_code END)                AS member_count,
+                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_code END)               AS new_members,
+                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_code END) * 1.0
+                    / NULLIF(COUNT(DISTINCT c.guest_code), 0) * 100                                            AS membership_adoption_rate,
+                SUM(CASE WHEN c.item_category != 'Memberships' THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
+                    / NULLIF(COUNT(DISTINCT CASE WHEN c.item_category != 'Memberships'
+                                                  THEN c.invoice_no END), 0)                                   AS blended_asp,
+                -- ASP = revenue / unique customer count (not invoice count)
+                SUM(CASE WHEN gc.is_new = 1 AND c.item_category != 'Memberships'
+                          THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
+                    / NULLIF(COUNT(DISTINCT CASE WHEN gc.is_new = 1 AND c.item_category != 'Memberships'
+                                                  THEN c.guest_code END), 0)                                   AS asp_new_clients,
+                SUM(CASE WHEN gc.is_new = 0 AND c.item_category != 'Memberships'
+                          THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
+                    / NULLIF(COUNT(DISTINCT CASE WHEN gc.is_new = 0 AND c.item_category != 'Memberships'
+                                                  THEN c.guest_code END), 0)                                   AS asp_existing_clients
+            FROM {FULL_CASH} c
+            JOIN guest_classification gc ON gc.guest_code = c.guest_code
             {where}
         ),
         yesterday_data AS (
@@ -136,19 +141,17 @@ def get_mtd_kpi_header(
         ),
         last_month_data AS (
             SELECT
-                COALESCE(SUM(sales_exc_tax), 0)            AS last_month_revenue,
-                COALESCE(COUNT(DISTINCT guest_id), 0)      AS last_month_clients
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) BETWEEN '{lm_start_dt}' AND '{lm_end_dt}'
-              AND LOWER(status) = 'closed'
+                COALESCE(SUM(sales_collected_exc_tax), 0)  AS last_month_revenue,
+                COALESCE(COUNT(DISTINCT guest_code), 0)    AS last_month_clients
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) BETWEEN '{lm_start_dt}' AND '{lm_end_dt}'
             {y_loc}
         ),
         prior_year AS (
-            SELECT COALESCE(SUM(sales_exc_tax), 0) AS py_revenue
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) >= '{py_start}'
-              AND CAST(sale_date AS DATE) <= '{py_end}'
-              AND LOWER(status) = 'closed'
+            SELECT COALESCE(SUM(sales_collected_exc_tax), 0) AS py_revenue
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) >= '{py_start}'
+              AND CAST(payment_date AS DATE) <= '{py_end}'
             {y_loc}
         ),
         schedule_util AS (
@@ -237,9 +240,10 @@ def get_mtd_kpi_header(
         CROSS JOIN provider_rev    pv
         CROSS JOIN rebooking       rb
         """
-        # params order: where (mtd), yesterday_data y_loc, last_month_data y_loc,
-        # prior_year y_loc, sched_block (provider_rev sch), where (provider_rev cash), appt_loc
-        all_params = merge_params(params, y_loc_p, y_loc_p, y_loc_p, sched_x, params, appt_loc_p)
+        # params order: guest_classification where, mtd where, yesterday_data y_loc,
+        # last_month_data y_loc, prior_year y_loc, sched_block (provider_rev sch),
+        # where (provider_rev cash), appt_loc
+        all_params = merge_params(params, params, y_loc_p, y_loc_p, y_loc_p, sched_x, params, appt_loc_p)
         rows = run_query(sql, all_params or None)
         return rows[0] if rows else {}
 
@@ -310,29 +314,26 @@ def get_mtd_summary(
             GROUP BY center_name
         ),
         prior_week AS (
-            SELECT center_name, SUM(sales_exc_tax) AS pw_revenue
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) >= '{pw_start}'
-              AND CAST(sale_date AS DATE) <= '{pw_end}'
-              AND LOWER(status) = 'closed'
+            SELECT center_name, SUM(sales_collected_exc_tax) AS pw_revenue
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) >= '{pw_start}'
+              AND CAST(payment_date AS DATE) <= '{pw_end}'
             {loc_and}
             GROUP BY center_name
         ),
         prior_month AS (
-            SELECT center_name, SUM(sales_exc_tax) AS pm_revenue
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) >= '{pm_start}'
-              AND CAST(sale_date AS DATE) <= '{pm_end}'
-              AND LOWER(status) = 'closed'
+            SELECT center_name, SUM(sales_collected_exc_tax) AS pm_revenue
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) >= '{pm_start}'
+              AND CAST(payment_date AS DATE) <= '{pm_end}'
             {loc_and}
             GROUP BY center_name
         ),
         prior_year AS (
-            SELECT center_name, SUM(sales_exc_tax) AS py_revenue
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) >= '{py_start}'
-              AND CAST(sale_date AS DATE) <= '{py_end}'
-              AND LOWER(status) = 'closed'
+            SELECT center_name, SUM(sales_collected_exc_tax) AS py_revenue
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) >= '{py_start}'
+              AND CAST(payment_date AS DATE) <= '{py_end}'
             {loc_and}
             GROUP BY center_name
         )
