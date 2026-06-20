@@ -61,9 +61,7 @@ def get_appointments_summary(
             COUNT(DISTINCT CASE WHEN add_on = 'No' AND LOWER(status) = 'closed' THEN guest_code END)
                                                                                                     AS unique_guests,
             AVG(CASE WHEN add_on = 'No' AND LOWER(status) = 'closed'
-                      AND {is_positive_duration('default_service_duration')}
-                     THEN {hhmm_to_hours('default_service_duration')} END)                            AS avg_scheduled_duration,
-            AVG(CASE WHEN add_on = 'No' AND LOWER(status) = 'closed'
+                      AND (service_name IS NULL OR LTRIM(RTRIM(service_name)) = '')
                       AND {is_positive_duration('actual_duration')}
                      THEN {hhmm_to_hours('actual_duration')} END)                                     AS avg_actual_duration,
             SUM(CASE WHEN add_on = 'No' AND LOWER(status) = 'closed'

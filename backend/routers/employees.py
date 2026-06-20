@@ -95,10 +95,14 @@ def get_employee_rph(
         s = start_date or str(today.replace(day=1))
 
         date_range = _build_date_range(s, e)
+        # Pivot columns now read off `daily` — a CTE where schedule and sales
+        # have already been pre-aggregated to (center, employee, day) grain
+        # and joined 1:1. No fan-out risk, so summing booked_hours per day
+        # here is safe.
         pivot_cols = ",\n        ".join(
-            f"SUM(CASE WHEN CAST(es.date AS DATE) = '{d}' THEN sa.sales_exc_tax ELSE 0 END)"
+            f"SUM(CASE WHEN daily.work_date = '{d}' THEN daily.daily_revenue ELSE 0 END)"
             f" * 1.0"
-            f" / NULLIF(SUM(CASE WHEN CAST(es.date AS DATE) = '{d}' THEN {hhmm_to_hours('es.booked_hours')} ELSE 0 END), 0)"
+            f" / NULLIF(SUM(CASE WHEN daily.work_date = '{d}' THEN daily.booked_hours ELSE 0 END), 0)"
             f" AS d_{d.strftime('%Y%m%d')}"
             for d in date_range
         )
@@ -107,24 +111,60 @@ def get_employee_rph(
         loc_and_sa, loc_params_sa = loc_in(locations, col="sa.center_name")
 
         sql = f"""
+        WITH sched_by_day AS (
+            -- Pre-aggregate to (center, employee, day) BEFORE joining to sales.
+            -- Joining line-item-grain sales directly to raw schedule rows and
+            -- summing booked_hours over the joined result re-adds the same
+            -- day's hours once per sales line item (fan-out), understating
+            -- rev/hr. Aggregating each side to matching grain first prevents
+            -- that.
+            SELECT
+                center_name,
+                employee_name,
+                job_name,
+                CAST(date AS DATE)                       AS work_date,
+                SUM({hhmm_to_hours('booked_hours')})     AS booked_hours
+            FROM {FULL_SCHEDULE} es
+            WHERE CAST(date AS DATE) BETWEEN '{s}' AND '{e}'
+              AND job_name IN ('Treatment Provider', 'Esthetician')
+              AND {is_positive_duration('booked_hours')}
+              {loc_and_es}
+            GROUP BY center_name, employee_name, job_name, CAST(date AS DATE)
+        ),
+        sales_by_day AS (
+            SELECT
+                center_name,
+                serviced_by,
+                CAST(sale_date AS DATE) AS sale_date,
+                SUM(sales_exc_tax)      AS daily_revenue
+            FROM {FULL_SALES} sa
+            WHERE CAST(sale_date AS DATE) BETWEEN '{s}' AND '{e}'
+              {loc_and_sa}
+            GROUP BY center_name, serviced_by, CAST(sale_date AS DATE)
+        ),
+        daily AS (
+            SELECT
+                sch.center_name,
+                sch.employee_name,
+                sch.job_name,
+                sch.work_date,
+                sch.booked_hours,
+                COALESCE(sa.daily_revenue, 0) AS daily_revenue
+            FROM sched_by_day sch
+            LEFT JOIN sales_by_day sa
+              ON sa.serviced_by = sch.employee_name
+             AND sa.sale_date   = sch.work_date
+             AND sa.center_name = sch.center_name
+        )
         SELECT
-            es.center_name                                                                  AS center,
-            es.job_name                                                                     AS role,
-            es.employee_name                                                                AS name,
-            SUM(sa.sales_exc_tax) * 1.0 / NULLIF(SUM({hhmm_to_hours('es.booked_hours')}), 0)                 AS tot,
+            daily.center_name                                                                 AS center,
+            daily.job_name                                                                     AS role,
+            daily.employee_name                                                                AS name,
+            SUM(daily.daily_revenue) * 1.0 / NULLIF(SUM(daily.booked_hours), 0)               AS tot,
             {pivot_cols}
-        FROM {FULL_SCHEDULE} es
-        JOIN {FULL_SALES} sa
-          ON sa.serviced_by = es.employee_name
-         AND CAST(sa.sale_date AS DATE) = CAST(es.date AS DATE)
-         AND sa.center_name = es.center_name
-        WHERE CAST(es.date AS DATE) BETWEEN '{s}' AND '{e}'
-          AND es.job_name IN ('Treatment Provider', 'Esthetician')
-          AND {is_positive_duration('es.booked_hours')}
-          {loc_and_es}
-          {loc_and_sa}
-        GROUP BY es.center_name, es.job_name, es.employee_name
-        ORDER BY es.job_name, es.center_name, es.employee_name
+        FROM daily
+        GROUP BY daily.center_name, daily.job_name, daily.employee_name
+        ORDER BY daily.job_name, daily.center_name, daily.employee_name
         """
         params = (loc_params_es + loc_params_sa) if (loc_params_es or loc_params_sa) else None
         rows = run_query(sql, params)

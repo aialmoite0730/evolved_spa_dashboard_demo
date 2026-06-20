@@ -48,6 +48,7 @@ export function useDashboard() {
   const [apptCancelReasons, setApptCancelReasons] = useState([]);
   const [apptDailyTrend,    setApptDailyTrend]    = useState([]);
   const [apptRequestType,   setApptRequestType]   = useState([]);
+  const [mtdDailyTrend,     setMtdDailyTrend]     = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -61,7 +62,7 @@ export function useDashboard() {
   // filters stays null until this resolves, which blocks all data fetches.
   useEffect(() => {
     Promise.all([
-      fetchJSON("/api/latest-date"),
+      fetchJSON("/api/latest-cash-date"),
       fetchJSON("/api/locations"),
     ])
       .then(([dateRes, locs]) => {
@@ -101,6 +102,7 @@ export function useDashboard() {
       aSummary, aStatus, aCategory,
       aProvider, aSource, aCancelReasons,
       aDailyTrend, aRequestType,
+      mtdTrend,
     ] = await Promise.all([
       fetchJSON(`/api/mtd-kpi-header${mtdQ}`,                      signal),
       fetchJSON(`/api/daily-kpis${dateQ}`,                         signal),
@@ -122,6 +124,7 @@ export function useDashboard() {
       fetchJSON(`/api/appointments/cancellation-reasons${mtdQ}`,   signal),
       fetchJSON(`/api/appointments/daily-trend${mtdQ}`,            signal),
       fetchJSON(`/api/appointments/request-type${mtdQ}`,           signal),
+      fetchJSON(`/api/mtd-daily-trend${mtdQ}`,                     signal),
     ]);
 
     setKpiHeader(header);
@@ -144,6 +147,7 @@ export function useDashboard() {
     setApptCancelReasons(aCancelReasons);
     setApptDailyTrend(aDailyTrend);
     setApptRequestType(aRequestType);
+    setMtdDailyTrend(mtdTrend);
   }, []);
 
   // ── Debounced refresh ──────────────────────────────────────────────────────
@@ -242,6 +246,7 @@ export function useDashboard() {
     apptSummary, apptByStatus, apptByCategory,
     apptByProvider, apptBySource, apptCancelReasons,
     apptDailyTrend, apptRequestType,
+    mtdDailyTrend,
     loading, error,
     updateFilter, updateDateRange, toggleLocation, refresh,
   };

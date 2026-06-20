@@ -2,7 +2,7 @@ from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Query, Request
 
-from config import FULL_SALES, FULL_APPT
+from config import FULL_SALES, FULL_CASH, FULL_APPT
 from db import run_query, serialize_rows
 from utils.filters import loc_in
 from utils.errors import log_and_raise_from_request
@@ -18,6 +18,20 @@ def get_latest_date(request: Request):
         SELECT MAX(CAST(sale_date AS DATE)) AS latest_date
         FROM {FULL_SALES}
         WHERE LOWER(status) = 'closed'
+        """
+        rows = run_query(sql)
+        return {"latest_date": str(rows[0]["latest_date"]) if rows else None}
+    except Exception as exc:
+        log_and_raise_from_request(exc, request)
+
+
+@router.get("/api/latest-cash-date")
+def get_latest_cash_date(request: Request):
+    """Returns the latest payment_date in the cash collections table."""
+    try:
+        sql = f"""
+        SELECT MAX(CAST(payment_date AS DATE)) AS latest_date
+        FROM {FULL_CASH}
         """
         rows = run_query(sql)
         return {"latest_date": str(rows[0]["latest_date"]) if rows else None}
@@ -156,39 +170,31 @@ def get_daily_sales_mix(
 
         sql = f"""
         SELECT
-            center_name                                                                              AS location,
+            center_name                                                                                        AS location,
             SUM(CASE WHEN (item_category = 'Body Contouring'
-                      OR item_sub_category = 'Body Contouring')
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS body_contouring,
-            SUM(CASE WHEN item_category = 'Facials'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS facials,
-            SUM(CASE WHEN item_sub_category = 'Filler'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS filler,
+                      OR item_sub_category = 'Body Contouring') THEN sales_collected_exc_tax ELSE 0 END)       AS body_contouring,
+            SUM(CASE WHEN item_category = 'Facials'             THEN sales_collected_exc_tax ELSE 0 END)       AS facials,
+            SUM(CASE WHEN item_sub_category = 'Filler'          THEN sales_collected_exc_tax ELSE 0 END)       AS filler,
             SUM(CASE WHEN (item_category = 'Laser Hair Removal'
                       OR item_sub_category = 'Laser Hair Removal')
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS laser_hair_removal,
-            SUM(CASE WHEN item_category = 'Memberships'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS memberships,
-            SUM(CASE WHEN item_sub_category = 'Toxin'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS neurotoxins,
+                                                                 THEN sales_collected_exc_tax ELSE 0 END)       AS laser_hair_removal,
+            SUM(CASE WHEN item_category = 'Memberships'         THEN sales_collected_exc_tax ELSE 0 END)       AS memberships,
+            SUM(CASE WHEN item_sub_category = 'Toxin'           THEN sales_collected_exc_tax ELSE 0 END)       AS neurotoxins,
             SUM(CASE WHEN item_category NOT IN (
                         'Facials','Memberships','Injectables','Skin Rejuvenation',
                         'Retail','Laser Hair Removal','Body Contouring')
                       AND item_sub_category NOT IN (
                         'Body Contouring','Filler','Laser Hair Removal',
                         'Toxin','Other Injectables','PRF')
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS other,
+                                                                 THEN sales_collected_exc_tax ELSE 0 END)       AS other,
             SUM(CASE WHEN item_sub_category = 'Other Injectables'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS other_injectables,
-            SUM(CASE WHEN item_sub_category = 'PRF'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS prf,
-            SUM(CASE WHEN item_category = 'Retail'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS retail,
-            SUM(CASE WHEN item_category = 'Skin Rejuvenation'
-                      AND LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS skin_rejuvenation,
-            SUM(CASE WHEN LOWER(status) = 'closed'             THEN sales_exc_tax ELSE 0 END)       AS total
-        FROM {FULL_SALES}
-        WHERE CAST(sale_date AS DATE) = '{effective_date}'
+                                                                 THEN sales_collected_exc_tax ELSE 0 END)       AS other_injectables,
+            SUM(CASE WHEN item_sub_category = 'PRF'             THEN sales_collected_exc_tax ELSE 0 END)       AS prf,
+            SUM(CASE WHEN item_category = 'Retail'              THEN sales_collected_exc_tax ELSE 0 END)       AS retail,
+            SUM(CASE WHEN item_category = 'Skin Rejuvenation'   THEN sales_collected_exc_tax ELSE 0 END)       AS skin_rejuvenation,
+            SUM(sales_collected_exc_tax)                                                                        AS total
+        FROM {FULL_CASH}
+        WHERE CAST(payment_date AS DATE) = '{effective_date}'
         {loc_and}
         GROUP BY center_name
         ORDER BY center_name

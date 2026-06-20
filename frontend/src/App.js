@@ -7,7 +7,7 @@ import SalesMixTable from "./components/SalesMixTable";
 import MTDSummaryTable from "./components/MTDSummaryTable";
 import MonthlyTrendTable from "./components/MonthlyTrendTable";
 import OperationsTable from "./components/OperationsTable";
-import { RevenueTrendChart, LocationBarChart } from "./components/RevenueTrendChart";
+import { RevenueTrendChart, LocationBarChart, MTDPerformanceChart } from "./components/RevenueTrendChart";
 import CategoryBreakdown from "./components/CategoryBreakdown";
 import EmployeeUtilTable from "./components/EmployeeUtilTable";
 import EmployeeRphTable from "./components/EmployeeRphTable";
@@ -244,6 +244,11 @@ export default function App() {
                     yType="cur"
                     secondaryKey="monthly_budget"
                     secondaryLabel="Budget"
+                    lines={[
+                      { dataKey: "monthly_budget", name: "Budget Line",   color: "#C8C4BE", dashed: true  },
+                      { dataKey: "cash_sales",     name: "Sales Line",    color: "#A37B88", dashed: false },
+                      { dataKey: "trending",       name: "Trending",      color: "#2E7D32", dashed: true  },
+                    ]}
                   />
                 </div>
               </div>

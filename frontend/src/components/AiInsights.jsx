@@ -27,15 +27,15 @@ function valOrMissing(n, formatter) {
 
 // ── Shared grounding rules ────────────────────────────────────────────────────
 const GROUNDING_RULES =
-  `RULES FOR THIS ANALYSIS:\n` +
-  `- Only use the numbers given below. Do not invent, estimate, or assume any figure not explicitly provided.\n` +
-  `- "MISSING" or "N/A" means the data point is genuinely unavailable — say so plainly or skip it. Do not guess a value.\n` +
-  `- "0" or "0%" is a real, reported value — treat it as a true result, not as missing data.\n` +
-  `- Do not speculate about causes unless explicitly stated in the data.\n` +
-  `- When flagging an outlier, name the specific location and cite the specific number.\n` +
-  `- Recommendations must be tied to a specific number cited earlier — no generic advice.\n` +
-  `- Write in plain business English, short paragraphs, no bullet points, no markdown headers, no emojis.\n` +
-  `- Max 110 words.\n`;
+  `GUIDELINES FOR THIS ANALYSIS:\n` +
+  `- Use only the numbers provided below. Do not invent, estimate, or assume values not explicitly given.\n` +
+  `- If a value is "MISSING" or "N/A", state that plainly or skip that point — do not guess.\n` +
+  `- Treat reported "0" or "0%" as valid values.\n` +
+  `- Avoid speculative causes unless the data directly supports them.\n` +
+  `- When noting an outlier, name the location and cite the exact number.\n` +
+  `- Tie every recommendation to a specific number cited earlier — no generic advice.\n` +
+  `- Write in a friendly, conversational, and optimistic tone. Use short paragraphs, no bullet lists, no headers, and no emojis.\n` +
+  `- Produce 4-6 concise insights and keep the total under 140 words.\n`;
 
 // ── Prompt builder ────────────────────────────────────────────────────────────
 function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
@@ -45,8 +45,9 @@ function buildPrompt(tab, dash, effectiveStart, effectiveEnd, viewMode) {
     : `Month-to-Date Period: ${effectiveStart} to ${effectiveEnd}`;
 
   const role =
-    `You are a senior business analyst for Evolve Med Spa, a multi-location med spa chain. ` +
-    `Analyze ONLY the real dashboard data provided below and write 4-6 specific, data-backed insights.\n\n`;
+    `You are a senior business analyst and an upbeat business partner for Evolve Med Spa, a multi-location med spa chain. ` +
+    `Using ONLY the dashboard data provided below, write 4-6 specific, data-backed insights in a friendly, conversational, and optimistic tone. ` +
+    `Frame observations positively, focus on opportunities and actionable suggestions tied to the numbers, and avoid harsh criticism.\n\n`;
 
   const base = role + GROUNDING_RULES + `\n${dateRange}\n\n`;
 

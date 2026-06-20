@@ -4,9 +4,9 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Query, Request
 
-from config import FULL_SALES, FULL_SCHEDULE, FULL_APPT
-from db import run_query
-from utils.filters import build_date_filter, build_sched_filter, build_join_where, merge_params, loc_in, hhmm_to_hours
+from config import FULL_SALES, FULL_CASH, FULL_SCHEDULE, FULL_APPT
+from db import run_query, serialize_rows
+from utils.filters import build_date_filter, build_sched_filter, merge_params, loc_in, hhmm_to_hours
 from utils.errors import log_and_raise_from_request
 
 router = APIRouter()
@@ -66,11 +66,14 @@ def get_mtd_kpi_header(
 ):
     """Single-row KPI banner shown on every tab."""
     try:
-        today = datetime.utcnow().date()
-        e = end_date   or str(today)
-        s = start_date or str(today.replace(day=1))
+        if not end_date:
+            r = run_query(f"SELECT MAX(CAST(payment_date AS DATE)) AS d FROM {FULL_CASH}")
+            end_date = str(r[0]["d"]) if r and r[0].get("d") else str(datetime.utcnow().date())
+        e = end_date
+        e_dt_tmp = datetime.strptime(e, "%Y-%m-%d").date()
+        s = start_date or str(e_dt_tmp.replace(day=1))
 
-        where, params = build_date_filter(s, e, locations)
+        where, params = build_date_filter(s, e, locations, date_col="payment_date")
         e_dt      = datetime.strptime(e, "%Y-%m-%d").date()
         s_dt      = datetime.strptime(s, "%Y-%m-%d").date()
         yesterday = str(e_dt - timedelta(days=1))
@@ -86,54 +89,58 @@ def get_mtd_kpi_header(
             py_end   = str(e_dt - timedelta(days=365))
 
         sched_block, sched_x = build_sched_filter(s, e, locations)
-        join_where           = build_join_where(where)
         appt_loc, appt_loc_p = loc_in(locations)
         y_loc,    y_loc_p    = loc_in(locations)
 
         sql = f"""
         WITH mtd AS (
             SELECT
-                SUM(sales_exc_tax)                                                                  AS mtd_revenue,
-                SUM(sales_exc_tax) * 1.0
-                    / NULLIF(COUNT(DISTINCT CAST(sale_date AS DATE)), 0)                            AS avg_daily_revenue,
-                COUNT(DISTINCT guest_id)                                                            AS total_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'yes'  THEN guest_id END)                       AS new_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'no'
-                                     AND LOWER(member) = 'no'       THEN guest_id END)                        AS existing_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(member) = 'yes'       THEN guest_id END)                        AS member_count,
-                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_id END)          AS new_members,
-                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_id END) * 1.0
-                    / NULLIF(COUNT(DISTINCT guest_id), 0) * 100                                     AS membership_adoption_rate,
-                SUM(CASE WHEN item_category != 'Memberships' THEN sales_exc_tax ELSE 0 END) * 1.0
+                SUM(sales_collected_exc_tax)                                                                  AS mtd_revenue,
+                SUM(sales_collected_exc_tax) * 1.0
+                    / NULLIF(COUNT(DISTINCT CAST(payment_date AS DATE)), 0)                                   AS avg_daily_revenue,
+                COUNT(DISTINCT guest_code)                                                                     AS total_client_count,
+                -- new + existing must partition total_client_count exactly: every
+                -- distinct guest is either first_visit='yes' or first_visit='no'.
+                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'yes' THEN guest_code END)                      AS new_client_count,
+                COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'no'  THEN guest_code END)                      AS existing_client_count,
+                COUNT(DISTINCT CASE WHEN LOWER(member) = 'yes'      THEN guest_code END)                      AS member_count,
+                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_code END)                   AS new_members,
+                COUNT(DISTINCT CASE WHEN item_category = 'Memberships' THEN guest_code END) * 1.0
+                    / NULLIF(COUNT(DISTINCT guest_code), 0) * 100                                              AS membership_adoption_rate,
+                SUM(CASE WHEN item_category != 'Memberships' THEN sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN item_category != 'Memberships'
-                                                  THEN invoice_id END), 0)                          AS blended_asp,
+                                                  THEN invoice_no END), 0)                                     AS blended_asp,
+                -- ASP for new/existing clients is revenue / UNIQUE CUSTOMER count,
+                -- not revenue / invoice count. A client with 2 invoices in the
+                -- period should still count once in the denominator.
                 SUM(CASE WHEN LOWER(first_visit) = 'yes' AND item_category != 'Memberships'
-                          THEN sales_exc_tax ELSE 0 END) * 1.0
+                          THEN sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'yes'
                                                   AND item_category != 'Memberships'
-                                                  THEN invoice_id END), 0)                          AS asp_new_clients,
+                                                  THEN guest_code END), 0)                                     AS asp_new_clients,
                 SUM(CASE WHEN LOWER(first_visit) = 'no' AND item_category != 'Memberships'
-                          THEN sales_exc_tax ELSE 0 END) * 1.0
+                          THEN sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN LOWER(first_visit) = 'no'
                                                   AND item_category != 'Memberships'
-                                                  THEN invoice_id END), 0)                          AS asp_existing_clients
-            FROM {FULL_SALES}
+                                                  THEN guest_code END), 0)                                     AS asp_existing_clients
+            FROM {FULL_CASH}
             {where}
         ),
         yesterday_data AS (
             SELECT
-                COALESCE(SUM(sales_exc_tax), 0)       AS yesterday_revenue,
-                COALESCE(COUNT(DISTINCT guest_id), 0) AS yesterday_clients
-            FROM {FULL_SALES}
-            WHERE CAST(sale_date AS DATE) = '{yesterday}'
+                COALESCE(SUM(sales_collected_exc_tax), 0)       AS yesterday_revenue,
+                COALESCE(COUNT(DISTINCT guest_code), 0)         AS yesterday_clients
+            FROM {FULL_CASH}
+            WHERE CAST(payment_date AS DATE) = '{yesterday}'
             {y_loc}
         ),
         last_month_data AS (
             SELECT
-                COALESCE(SUM(sales_exc_tax), 0)       AS last_month_revenue,
-                COALESCE(COUNT(DISTINCT guest_id), 0) AS last_month_clients
+                COALESCE(SUM(sales_exc_tax), 0)            AS last_month_revenue,
+                COALESCE(COUNT(DISTINCT guest_id), 0)      AS last_month_clients
             FROM {FULL_SALES}
             WHERE CAST(sale_date AS DATE) BETWEEN '{lm_start_dt}' AND '{lm_end_dt}'
+              AND LOWER(status) = 'closed'
             {y_loc}
         ),
         prior_year AS (
@@ -141,6 +148,7 @@ def get_mtd_kpi_header(
             FROM {FULL_SALES}
             WHERE CAST(sale_date AS DATE) >= '{py_start}'
               AND CAST(sale_date AS DATE) <= '{py_end}'
+              AND LOWER(status) = 'closed'
             {y_loc}
         ),
         schedule_util AS (
@@ -153,19 +161,39 @@ def get_mtd_kpi_header(
             GROUP BY job_name
         ),
         provider_rev AS (
+            -- Pre-aggregate schedule and cash sales to (center, employee, day) grain
+            -- before joining to avoid fan-out multiplying booked_hours per sales row.
             SELECT
-                SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN sa.sales_exc_tax ELSE 0 END) * 1.0
-                    / NULLIF(SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN {hhmm_to_hours('es.booked_hours')} ELSE 0 END), 0)
+                SUM(CASE WHEN sch.job_name = 'Treatment Provider' THEN COALESCE(sa.daily_revenue, 0) ELSE 0 END) * 1.0
+                    / NULLIF(SUM(CASE WHEN sch.job_name = 'Treatment Provider' THEN sch.booked_hours ELSE 0 END), 0)
                     AS rev_per_provider_hr,
-                SUM(CASE WHEN es.job_name = 'Esthetician' THEN sa.sales_exc_tax ELSE 0 END) * 1.0
-                    / NULLIF(SUM(CASE WHEN es.job_name = 'Esthetician' THEN {hhmm_to_hours('es.booked_hours')} ELSE 0 END), 0)
+                SUM(CASE WHEN sch.job_name = 'Esthetician' THEN COALESCE(sa.daily_revenue, 0) ELSE 0 END) * 1.0
+                    / NULLIF(SUM(CASE WHEN sch.job_name = 'Esthetician' THEN sch.booked_hours ELSE 0 END), 0)
                     AS rev_per_esthetician_hr
-            FROM {FULL_SALES} sa
-            LEFT JOIN {FULL_SCHEDULE} es
-              ON sa.serviced_by = es.employee_name
-             AND CAST(sa.sale_date AS DATE) = CAST(es.date AS DATE)
-             AND sa.center_name = es.center_name
-            {join_where}
+            FROM (
+                SELECT
+                    center_name,
+                    employee_name,
+                    job_name,
+                    CAST(date AS DATE)                   AS work_date,
+                    SUM({hhmm_to_hours('booked_hours')}) AS booked_hours
+                FROM {FULL_SCHEDULE}
+                {sched_block}
+                GROUP BY center_name, employee_name, job_name, CAST(date AS DATE)
+            ) sch
+            LEFT JOIN (
+                SELECT
+                    center_name,
+                    sold_by,
+                    CAST(payment_date AS DATE) AS payment_date,
+                    SUM(sales_collected_exc_tax) AS daily_revenue
+                FROM {FULL_CASH}
+                {where}
+                GROUP BY center_name, sold_by, CAST(payment_date AS DATE)
+            ) sa
+              ON sa.sold_by     = sch.employee_name
+             AND sa.payment_date = sch.work_date
+             AND sa.center_name  = sch.center_name
         ),
         rebooking AS (
             SELECT
@@ -209,8 +237,8 @@ def get_mtd_kpi_header(
         CROSS JOIN provider_rev    pv
         CROSS JOIN rebooking       rb
         """
-        # params order matches %s occurrences: where, yesterday_data y_loc,
-        # last_month_data y_loc, prior_year y_loc, sched_block, join_where, appt_loc
+        # params order: where (mtd), yesterday_data y_loc, last_month_data y_loc,
+        # prior_year y_loc, sched_block (provider_rev sch), where (provider_rev cash), appt_loc
         all_params = merge_params(params, y_loc_p, y_loc_p, y_loc_p, sched_x, params, appt_loc_p)
         rows = run_query(sql, all_params or None)
         return rows[0] if rows else {}
@@ -228,9 +256,12 @@ def get_mtd_summary(
 ):
     """Per-location MTD revenue vs prior week / prior month / prior year + membership stats."""
     try:
-        today = datetime.utcnow().date()
-        e = end_date   or str(today)
-        s = start_date or str(today.replace(day=1))
+        if not end_date:
+            r = run_query(f"SELECT MAX(CAST(payment_date AS DATE)) AS d FROM {FULL_CASH}")
+            end_date = str(r[0]["d"]) if r and r[0].get("d") else str(datetime.utcnow().date())
+        e = end_date
+        e_dt_fix = datetime.strptime(e, "%Y-%m-%d").date()
+        s = start_date or str(e_dt_fix.replace(day=1))
 
         end_dt   = datetime.strptime(e, "%Y-%m-%d").date()
         start_dt = datetime.strptime(s, "%Y-%m-%d").date()
@@ -252,7 +283,7 @@ def get_mtd_summary(
             py_start = str(start_dt - timedelta(days=365))
             py_end   = str(end_dt   - timedelta(days=365))
 
-        where, params     = build_date_filter(s, e, locations)
+        where, params     = build_date_filter(s, e, locations, date_col="payment_date")
         days_in_month     = calendar.monthrange(end_dt.year, end_dt.month)[1]
         days_elapsed      = (end_dt - end_dt.replace(day=1)).days + 1
         loc_and, loc_p    = loc_in(locations)
@@ -264,17 +295,17 @@ def get_mtd_summary(
         current_period AS (
             SELECT
                 center_name,
-                SUM(sales_exc_tax)                                                                  AS cash_sales,
-                SUM(sales_exc_tax) * 1.0
-                    / NULLIF(COUNT(DISTINCT CAST(sale_date AS DATE)), 0)                            AS avg_daily_sales,
-                SUM(CASE WHEN item_category != 'Memberships' THEN sales_exc_tax ELSE 0 END)        AS cash_sales_excl_mbr,
-                SUM(CASE WHEN CAST(sale_date AS DATE)
+                SUM(sales_collected_exc_tax)                                                                  AS cash_sales,
+                SUM(sales_collected_exc_tax) * 1.0
+                    / NULLIF(COUNT(DISTINCT CAST(payment_date AS DATE)), 0)                                   AS avg_daily_sales,
+                SUM(CASE WHEN item_category != 'Memberships' THEN sales_collected_exc_tax ELSE 0 END)        AS cash_sales_excl_mbr,
+                SUM(CASE WHEN CAST(payment_date AS DATE)
                              BETWEEN DATEADD(DAY, -6, '{e}') AND '{e}'
-                         THEN sales_exc_tax ELSE 0 END)                                             AS current_week_revenue,
-                COUNT(DISTINCT CASE WHEN item_category = 'Memberships'  THEN guest_id END)         AS new_members,
-                COUNT(DISTINCT CASE WHEN item_category != 'Memberships' THEN guest_id END)         AS non_members,
-                COUNT(DISTINCT guest_id)                                                            AS total_guests
-            FROM {FULL_SALES}
+                         THEN sales_collected_exc_tax ELSE 0 END)                                             AS current_week_revenue,
+                COUNT(DISTINCT CASE WHEN item_category = 'Memberships'  THEN guest_code END)                  AS new_members,
+                COUNT(DISTINCT CASE WHEN item_category != 'Memberships' THEN guest_code END)                  AS non_members,
+                COUNT(DISTINCT guest_code)                                                                     AS total_guests
+            FROM {FULL_CASH}
             {where}
             GROUP BY center_name
         ),
@@ -283,6 +314,7 @@ def get_mtd_summary(
             FROM {FULL_SALES}
             WHERE CAST(sale_date AS DATE) >= '{pw_start}'
               AND CAST(sale_date AS DATE) <= '{pw_end}'
+              AND LOWER(status) = 'closed'
             {loc_and}
             GROUP BY center_name
         ),
@@ -291,6 +323,7 @@ def get_mtd_summary(
             FROM {FULL_SALES}
             WHERE CAST(sale_date AS DATE) >= '{pm_start}'
               AND CAST(sale_date AS DATE) <= '{pm_end}'
+              AND LOWER(status) = 'closed'
             {loc_and}
             GROUP BY center_name
         ),
@@ -299,6 +332,7 @@ def get_mtd_summary(
             FROM {FULL_SALES}
             WHERE CAST(sale_date AS DATE) >= '{py_start}'
               AND CAST(sale_date AS DATE) <= '{py_end}'
+              AND LOWER(status) = 'closed'
             {loc_and}
             GROUP BY center_name
         )
@@ -368,6 +402,74 @@ def get_mtd_sales_mix(
         ORDER BY center_name
         """
         return run_query(sql, params or None)
+
+    except Exception as exc:
+        log_and_raise_from_request(exc, request)
+
+
+@router.get("/api/mtd-daily-trend")
+def get_mtd_daily_trend(
+    request:    Request,
+    start_date: Optional[str]       = Query(None),
+    end_date:   Optional[str]       = Query(None),
+    locations:  Optional[List[str]] = Query(None),
+):
+    """Daily + cumulative cash sales, budget pace, and trending projection for the MTD chart."""
+    try:
+        if not end_date:
+            r = run_query(f"SELECT MAX(CAST(payment_date AS DATE)) AS d FROM {FULL_CASH}")
+            end_date = str(r[0]["d"]) if r and r[0].get("d") else str(datetime.utcnow().date())
+        e     = end_date
+        e_dt  = datetime.strptime(e, "%Y-%m-%d").date()
+        s     = start_date or str(e_dt.replace(day=1))
+
+        where, params    = build_date_filter(s, e, locations, date_col="payment_date")
+        days_in_month    = calendar.monthrange(e_dt.year, e_dt.month)[1]
+        days_elapsed     = (e_dt - e_dt.replace(day=1)).days + 1
+
+        # ── Budget total for selected locations ──────────────────────────────
+        if locations:
+            bw_ph     = ",".join(["%s"] * len(locations))
+            budget_sql = f"""
+            WITH b AS (SELECT location, monthly_budget FROM {_BUDGET_VALUES})
+            SELECT COALESCE(SUM(monthly_budget), 0) AS total_budget
+            FROM b WHERE location IN ({bw_ph})
+            """
+            budget_rows = run_query(budget_sql, list(locations))
+        else:
+            budget_sql = f"""
+            WITH b AS (SELECT location, monthly_budget FROM {_BUDGET_VALUES})
+            SELECT COALESCE(SUM(monthly_budget), 0) AS total_budget FROM b
+            """
+            budget_rows = run_query(budget_sql)
+        monthly_budget = float(budget_rows[0]["total_budget"]) if budget_rows else 0.0
+
+        # ── Daily + cumulative cash sales ─────────────────────────────────────
+        sql = f"""
+        SELECT
+            CAST(payment_date AS DATE)                                              AS day,
+            SUM(sales_collected_exc_tax)                                            AS daily_sales,
+            SUM(SUM(sales_collected_exc_tax)) OVER (
+                ORDER BY CAST(payment_date AS DATE)
+                ROWS UNBOUNDED PRECEDING
+            )                                                                       AS cumulative_sales
+        FROM {FULL_CASH}
+        {where}
+        GROUP BY CAST(payment_date AS DATE)
+        ORDER BY day
+        """
+        daily_rows = run_query(sql, params or None)
+
+        total_sales = float(daily_rows[-1]["cumulative_sales"]) if daily_rows else 0.0
+        avg_daily   = total_sales / days_elapsed if days_elapsed else 0.0
+        trending    = round(avg_daily * days_in_month, 2)
+
+        return {
+            "daily":          serialize_rows(daily_rows),
+            "monthly_budget": monthly_budget,
+            "trending":       trending,
+            "days_in_month":  days_in_month,
+        }
 
     except Exception as exc:
         log_and_raise_from_request(exc, request)

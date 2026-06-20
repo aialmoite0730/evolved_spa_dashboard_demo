@@ -6,14 +6,20 @@ from fastapi import APIRouter, Query, Request
 
 from config import FULL_SALES, FULL_SCHEDULE, FULL_APPT
 from db import run_query, serialize_rows
-from utils.filters import build_date_filter, build_sched_filter, build_join_where, merge_params, loc_in, hhmm_to_hours
+from utils.filters import build_date_filter, build_sched_filter, merge_params, loc_in, hhmm_to_hours
 from utils.errors import log_and_raise_from_request
 
 router = APIRouter()
 
 
-def _schedule_and_rev_ctes(sched_block, join_where, full_schedule, full_sales):
-    """Return the schedule_agg and rev_by_role CTE bodies (without the WITH keyword)."""
+def _schedule_and_rev_ctes(sched_block, where, full_schedule, full_sales):
+    """Return the schedule_agg and rev_by_role CTE bodies (without the WITH keyword).
+
+    rev_by_role pre-aggregates schedule and sales to (center, employee, day)
+    grain in separate subqueries before joining them, to avoid the fan-out
+    bug where joining line-item-grain sales directly to day-grain schedule
+    rows multiplies booked_hours once per sales line item.
+    """
     return f"""
     schedule_agg AS (
         SELECT
@@ -28,22 +34,47 @@ def _schedule_and_rev_ctes(sched_block, join_where, full_schedule, full_sales):
         {sched_block}
         GROUP BY center_name
     ),
+    sched_by_employee AS (
+        -- Pre-aggregate schedule to (center, employee, day) BEFORE joining to sales.
+        -- Sales is line-item grain; joining it directly against raw schedule rows
+        -- and then summing booked_hours over the joined result re-adds the same
+        -- day's hours once per sales line item (fan-out), wildly understating
+        -- rev/hr. Aggregating each side to matching grain first prevents that.
+        SELECT
+            center_name,
+            employee_name,
+            job_name,
+            CAST(date AS DATE)                       AS work_date,
+            SUM({hhmm_to_hours("booked_hours")})     AS booked_hours
+        FROM {full_schedule}
+        {sched_block}
+        GROUP BY center_name, employee_name, job_name, CAST(date AS DATE)
+    ),
+    sales_by_employee AS (
+        SELECT
+            center_name,
+            serviced_by,
+            CAST(sale_date AS DATE) AS sale_date,
+            SUM(sales_exc_tax)      AS daily_revenue
+        FROM {full_sales}
+        {where}
+        GROUP BY center_name, serviced_by, CAST(sale_date AS DATE)
+    ),
     rev_by_role AS (
         SELECT
-            sa.center_name,
-            SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN sa.sales_exc_tax ELSE 0 END) * 1.0
-                / NULLIF(SUM(CASE WHEN es.job_name = 'Treatment Provider' THEN {hhmm_to_hours("es.booked_hours")} ELSE 0 END), 0)
+            sch.center_name,
+            SUM(CASE WHEN sch.job_name = 'Treatment Provider' THEN COALESCE(sa.daily_revenue, 0) ELSE 0 END) * 1.0
+                / NULLIF(SUM(CASE WHEN sch.job_name = 'Treatment Provider' THEN sch.booked_hours ELSE 0 END), 0)
                 AS rev_per_provider,
-            SUM(CASE WHEN es.job_name = 'Esthetician' THEN sa.sales_exc_tax ELSE 0 END) * 1.0
-                / NULLIF(SUM(CASE WHEN es.job_name = 'Esthetician' THEN {hhmm_to_hours("es.booked_hours")} ELSE 0 END), 0)
+            SUM(CASE WHEN sch.job_name = 'Esthetician' THEN COALESCE(sa.daily_revenue, 0) ELSE 0 END) * 1.0
+                / NULLIF(SUM(CASE WHEN sch.job_name = 'Esthetician' THEN sch.booked_hours ELSE 0 END), 0)
                 AS rev_per_esthetician
-        FROM {full_sales} sa
-        JOIN {full_schedule} es
-          ON sa.serviced_by = es.employee_name
-         AND CAST(sa.sale_date AS DATE) = CAST(es.date AS DATE)
-         AND sa.center_name = es.center_name
-        {join_where}
-        GROUP BY sa.center_name
+        FROM sched_by_employee sch
+        LEFT JOIN sales_by_employee sa
+          ON sa.serviced_by = sch.employee_name
+         AND sa.sale_date   = sch.work_date
+         AND sa.center_name = sch.center_name
+        GROUP BY sch.center_name
     )"""
 
 
@@ -62,8 +93,7 @@ def get_operations_summary(
 
         where,       params    = build_date_filter(s, e, locations)
         sched_block, sched_x   = build_sched_filter(s, e, locations)
-        join_where             = build_join_where(where)
-        all_params             = merge_params(params, sched_x)
+        all_params              = merge_params(params, sched_x, params)
 
         days_in_month = calendar.monthrange(
             datetime.strptime(e, "%Y-%m-%d").year,
@@ -71,7 +101,7 @@ def get_operations_summary(
         )[1]
 
         appt_loc, appt_loc_params = loc_in(locations)
-        shared_ctes = _schedule_and_rev_ctes(sched_block, join_where, FULL_SCHEDULE, FULL_SALES)
+        shared_ctes = _schedule_and_rev_ctes(sched_block, where, FULL_SCHEDULE, FULL_SALES)
 
         sql = f"""
         WITH sales AS (
@@ -152,8 +182,7 @@ def get_monthly_trend(
 
         where,       params   = build_date_filter(s, e, locations)
         sched_block, sched_x  = build_sched_filter(s, e, locations)
-        join_where            = build_join_where(where)
-        all_params            = merge_params(params, sched_x)
+        all_params             = merge_params(params, sched_x, params)
 
         days_in_month = calendar.monthrange(
             datetime.strptime(e, "%Y-%m-%d").year,
@@ -161,7 +190,7 @@ def get_monthly_trend(
         )[1]
 
         appt_loc, appt_loc_params = loc_in(locations)
-        shared_ctes = _schedule_and_rev_ctes(sched_block, join_where, FULL_SCHEDULE, FULL_SALES)
+        shared_ctes = _schedule_and_rev_ctes(sched_block, where, FULL_SCHEDULE, FULL_SALES)
 
         sql = f"""
         WITH sales AS (
