@@ -11,6 +11,28 @@ from utils.errors import log_and_raise_from_request
 
 router = APIRouter()
 
+# Cash collections payment-type filter: restrict to recognized collection types.
+#
+# The payment_type column stores a comma-separated string of ALL payment methods
+# used on a single invoice (e.g. " Card, Custom - Aspire, Gift Card(12345)").
+# The FIRST value in the list determines whether the row should be counted —
+# matching the UI filter which INCLUDES Cash, Card, Check, Custom-Financial,
+# Custom-Non-Financial and EXCLUDES rows that start with:
+#   Gift Cards, Prepaid Cards, Packages, Memberships, Loyalty Points, Cashback.
+#
+# NOTE: payment_type values have a leading space (e.g. " Card", " Gift Card(...)").
+# LTRIM() is required so the LIKE patterns match correctly against the actual data.
+# All valid rows start with: 'card', 'cash', 'check', or 'custom - *'.
+# Excluded rows start with:  'gift card', 'prepaid card', 'package - ', 'membership - '.
+_CASH_PAY_FILTER = (
+    "AND LOWER(LTRIM(payment_type)) NOT LIKE 'gift card%'"
+    " AND LOWER(LTRIM(payment_type)) NOT LIKE 'prepaid card%'"
+    " AND LOWER(LTRIM(payment_type)) NOT LIKE 'package -%'"
+    " AND LOWER(LTRIM(payment_type)) NOT LIKE 'membership -%'"
+    " AND LOWER(LTRIM(payment_type)) NOT LIKE 'loyalty%'"
+    " AND LOWER(LTRIM(payment_type)) NOT LIKE 'cashback%'"
+)
+
 # ── Shared sales-mix SELECT fragment ─────────────────────────────────────────
 _MIX_COLS = """
     SUM(CASE WHEN item_category = 'Body Contouring'
@@ -95,58 +117,69 @@ def get_mtd_kpi_header(
 
         sql = f"""
         WITH guest_classification AS (
-            -- One row per guest_code: is_new=1 if ANY row in period has first_visit='yes'.
+            -- One row per guest_name: is_new=1 if ANY row in period has first_visit='yes'.
             -- Ensures new+existing always partitions total exactly (no double-count).
             SELECT
-                guest_code,
+                guest_name,
                 MAX(CASE WHEN LOWER(first_visit) = 'yes' THEN 1 ELSE 0 END) AS is_new
             FROM {FULL_CASH}
             {where}
-            GROUP BY guest_code
+            {_CASH_PAY_FILTER}
+            GROUP BY guest_name
         ),
         mtd AS (
             SELECT
                 SUM(c.sales_collected_exc_tax)                                                                AS mtd_revenue,
                 SUM(c.sales_collected_exc_tax) * 1.0
                     / NULLIF(COUNT(DISTINCT CAST(c.payment_date AS DATE)), 0)                                 AS avg_daily_revenue,
-                COUNT(DISTINCT c.guest_code)                                                                   AS total_client_count,
-                COUNT(DISTINCT CASE WHEN gc.is_new = 1 THEN c.guest_code END)                                 AS new_client_count,
-                COUNT(DISTINCT CASE WHEN gc.is_new = 0 THEN c.guest_code END)                                 AS existing_client_count,
-                COUNT(DISTINCT CASE WHEN LOWER(c.member) = 'yes'        THEN c.guest_code END)                AS member_count,
-                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_code END)               AS new_members,
-                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_code END) * 1.0
-                    / NULLIF(COUNT(DISTINCT c.guest_code), 0) * 100                                            AS membership_adoption_rate,
+                COUNT(DISTINCT CASE WHEN c.sales_collected_exc_tax > 0
+                                     THEN CONCAT(c.guest_name, '|', CAST(c.payment_date AS DATE)) END)        AS total_customer_visits,
+                COUNT(DISTINCT CASE WHEN gc.is_new = 1 THEN c.guest_name END)                                 AS new_client_count,
+                COUNT(DISTINCT CASE WHEN gc.is_new = 0 THEN c.guest_name END)                                 AS existing_client_count,
+                COUNT(DISTINCT CASE WHEN LOWER(c.member) = 'yes'        THEN c.guest_name END)                AS member_count,
+                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_name END)               AS new_members,
+                COUNT(DISTINCT CASE WHEN c.item_category = 'Memberships' THEN c.guest_name END) * 1.0
+                    / NULLIF(COUNT(DISTINCT c.guest_name), 0) * 100                                            AS membership_adoption_rate,
                 SUM(CASE WHEN c.item_category != 'Memberships' THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN c.item_category != 'Memberships'
-                                                  THEN c.invoice_no END), 0)                                   AS blended_asp,
-                -- ASP = revenue / unique customer count (not invoice count)
+                                                  AND c.sales_collected_exc_tax > 0
+                                                  THEN CONCAT(c.guest_name, '|', CAST(c.payment_date AS DATE)) END), 0)
+                                                                                                              AS blended_asp,
+                -- ASP = cash sales / visits (unique guest_name per day, invoice value > 0)
                 SUM(CASE WHEN gc.is_new = 1 AND c.item_category != 'Memberships'
                           THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN gc.is_new = 1 AND c.item_category != 'Memberships'
-                                                  THEN c.guest_code END), 0)                                   AS asp_new_clients,
+                                                  AND c.sales_collected_exc_tax > 0
+                                                  THEN CONCAT(c.guest_name, '|', CAST(c.payment_date AS DATE)) END), 0)
+                                                                                                              AS asp_new_clients,
                 SUM(CASE WHEN gc.is_new = 0 AND c.item_category != 'Memberships'
                           THEN c.sales_collected_exc_tax ELSE 0 END) * 1.0
                     / NULLIF(COUNT(DISTINCT CASE WHEN gc.is_new = 0 AND c.item_category != 'Memberships'
-                                                  THEN c.guest_code END), 0)                                   AS asp_existing_clients
+                                                  AND c.sales_collected_exc_tax > 0
+                                                  THEN CONCAT(c.guest_name, '|', CAST(c.payment_date AS DATE)) END), 0)
+                                                                                                              AS asp_existing_clients
             FROM {FULL_CASH} c
-            JOIN guest_classification gc ON gc.guest_code = c.guest_code
+            JOIN guest_classification gc ON gc.guest_name = c.guest_name
             {where}
+            {_CASH_PAY_FILTER}
         ),
         yesterday_data AS (
             SELECT
                 COALESCE(SUM(sales_collected_exc_tax), 0)       AS yesterday_revenue,
-                COALESCE(COUNT(DISTINCT guest_code), 0)         AS yesterday_clients
+                COALESCE(COUNT(DISTINCT guest_name), 0)         AS yesterday_clients
             FROM {FULL_CASH}
             WHERE CAST(payment_date AS DATE) = '{yesterday}'
             {y_loc}
+            {_CASH_PAY_FILTER}
         ),
         last_month_data AS (
             SELECT
                 COALESCE(SUM(sales_collected_exc_tax), 0)  AS last_month_revenue,
-                COALESCE(COUNT(DISTINCT guest_code), 0)    AS last_month_clients
+                COALESCE(COUNT(DISTINCT guest_name), 0)    AS last_month_clients
             FROM {FULL_CASH}
             WHERE CAST(payment_date AS DATE) BETWEEN '{lm_start_dt}' AND '{lm_end_dt}'
             {y_loc}
+            {_CASH_PAY_FILTER}
         ),
         prior_year AS (
             SELECT COALESCE(SUM(sales_collected_exc_tax), 0) AS py_revenue
@@ -154,6 +187,7 @@ def get_mtd_kpi_header(
             WHERE CAST(payment_date AS DATE) >= '{py_start}'
               AND CAST(payment_date AS DATE) <= '{py_end}'
             {y_loc}
+            {_CASH_PAY_FILTER}
         ),
         schedule_util AS (
             SELECT
@@ -212,7 +246,7 @@ def get_mtd_kpi_header(
         SELECT
             m.mtd_revenue,
             m.avg_daily_revenue,
-            m.total_client_count,
+            m.total_customer_visits,
             m.new_client_count,
             m.existing_client_count,
             m.member_count,

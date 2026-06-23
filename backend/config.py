@@ -45,7 +45,7 @@ def get_sql_connection():
             timeout=10,
             charset='UTF-8'
         )
-        print(f"✅ Connected to SQL Server: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
+        print(f"[OK] Connected to SQL Server: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
         return conn
     except pymssql.DatabaseError as exc:
         raise RuntimeError(f"Failed to connect to SQL Server: {exc}") from exc
@@ -78,20 +78,20 @@ def _setup_credentials() -> bool:
             tmp.write(json.dumps(creds_dict))
             tmp.close()
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
-            print(f"✅ BQ credentials loaded from Base64 → {tmp.name}")
+            print(f"[OK] BQ credentials loaded from Base64 -> {tmp.name}")
             return True
         except Exception as exc:
-            print(f"⚠️  Failed to decode BIGQUERY_CREDENTIALS_BASE64: {exc}")
+            print(f"[WARN] Failed to decode BIGQUERY_CREDENTIALS_BASE64: {exc}")
             return False
 
     if creds_path:
         if os.path.exists(creds_path):
-            print(f"✅ BQ credentials loaded from file → {creds_path}")
+            print(f"[OK] BQ credentials loaded from file -> {creds_path}")
             return True
-        print(f"⚠️  BQ credentials file not found: {creds_path}")
+        print(f"[WARN] BQ credentials file not found: {creds_path}")
         return False
 
-    print("⚠️  No BQ credentials found — insights/api_log features will be unavailable.")
+    print("[WARN] No BQ credentials found - insights/api_log features will be unavailable.")
     return False
 
 
@@ -99,7 +99,7 @@ _BQ_AVAILABLE = _setup_credentials()
 try:
     BQ_CLIENT: bigquery.Client = bigquery.Client() if _BQ_AVAILABLE else None
 except Exception as _bq_exc:
-    print(f"⚠️  Could not create BigQuery client: {_bq_exc}")
+    print(f"[WARN] Could not create BigQuery client: {_bq_exc}")
     BQ_CLIENT = None
 
 

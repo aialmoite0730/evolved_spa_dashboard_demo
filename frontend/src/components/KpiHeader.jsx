@@ -151,11 +151,11 @@ export default function KpiHeader({ data }) {
           sub={yestSub}
         />
         <Tile
-          label="Total Customer Count"
-          val={fmtNum(data.total_client_count)}
+          label="Total Customer Visits"
+          val={fmtNum(data.total_customer_visits)}
           sub={data.yesterday_clients != null
-            ? `${fmtNum(data.yesterday_clients)} yesterday · MTD unique clients`
-            : "MTD unique clients"}
+            ? `${fmtNum(data.yesterday_clients)} yesterday · sum of unique guest per day (invoices > 0)`
+            : "sum of unique guest per day (invoices > 0)"}
         />
         <Tile
           label="New Customer Count"
