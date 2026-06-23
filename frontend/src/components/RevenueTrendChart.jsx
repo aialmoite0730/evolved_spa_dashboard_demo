@@ -241,61 +241,306 @@ export function LocationBarChart({
   );
 }
 
-// ── MTD Performance Chart (ComposedChart: daily bars + cumulative + budget pace + trending) ──
+// ── MTD Performance Chart ─────────────────────────────────────────────────────
+// Combo chart: daily revenue bars (left axis) + cumulative lines (right axis).
+// Matches reference: dark gray bars, dark-brown MTD trendline, light-gray
+// trending projection, gold goal line. Dual Y-axes ($M left, M right).
+//
+// API shape (from mtd.py /api/mtd-daily-trend):
+//   { daily: [{day, daily_sales, cumulative_sales},...],
+//     monthly_budget, trending (scalar month-end projection), days_in_month }
 export function MTDPerformanceChart({ data }) {
-  if (!data?.daily?.length) return <div className="empty-state">No trend data.</div>;
+  const daily       = data?.daily;
+  const daysInMonth = data?.days_in_month || 30;
+  const apiTrending = Number(data?.trending)       || 0;
+  const apiBudget   = Number(data?.monthly_budget) || 0;
 
-  const { daily, monthly_budget, days_in_month } = data;
+  if (!daily?.length) return <div className="empty-state">No MTD trend data.</div>;
 
-  const firstDay  = daily[0].day;                                  // "2026-05-01"
-  const [yr, mo]  = firstDay.split("-").map(Number);
-  const dailyMap  = {};
-  daily.forEach(d => { dailyMap[d.day] = d; });
+  const hasBudget = apiBudget > 0;
 
-  const lastRow          = daily[daily.length - 1];
-  const lastDayNum       = parseInt(lastRow.day.split("-")[2], 10);
-  const lastCumulative   = parseFloat(lastRow.cumulative_sales);
-  const avgDaily         = lastDayNum > 0 ? lastCumulative / lastDayNum : 0;
+  // Pace trending & goal as diagonals: value at day i = total * (i+1) / daysInMonth
+  const enriched = daily.map((row, i) => ({
+    day:            row.day,
+    daily_revenue:  Number(row.daily_sales)      || 0,
+    mtd_cumulative: Number(row.cumulative_sales) || 0,
+    trending:       apiTrending ? (apiTrending / daysInMonth) * (i + 1) : null,
+    goal_mtd:       hasBudget   ? (apiBudget   / daysInMonth) * (i + 1) : null,
+  }));
 
-  const chartData = Array.from({ length: days_in_month }, (_, i) => {
-    const d       = i + 1;
-    const dateStr = `${yr}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const actual  = dailyMap[dateStr];
-    return {
-      day:              d,
-      daily_sales:      actual ? parseFloat(actual.daily_sales)      : null,
-      cumulative_sales: actual ? parseFloat(actual.cumulative_sales)  : null,
-      budget_pace:      parseFloat(((monthly_budget / days_in_month) * d).toFixed(2)),
-      trend_projection: d >= lastDayNum
-        ? parseFloat((lastCumulative + avgDaily * (d - lastDayNum)).toFixed(2))
-        : null,
+  const fmtDate = d => {
+    if (!d) return "";
+    const dt = new Date(d + "T00:00:00");
+    return dt.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+  };
+
+  // Left axis: $0.0M, $0.2M … (daily bar scale)
+  const fmtLeft = v => {
+    const n = Number(v);
+    return `$${(n / 1_000_000).toFixed(1)}M`;
+  };
+
+  // Right axis: 0M, 5M, 10M … (cumulative line scale)
+  const fmtRight = v => {
+    const n = Number(v);
+    return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(0)}M`
+         : n >= 1_000     ? `${(n / 1_000).toFixed(0)}K`
+         : `${n}`;
+  };
+
+  // Tooltip formatter — always show dollars
+  const fmtDollar = v => {
+    const n = Number(v);
+    return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M`
+         : n >= 1_000     ? `$${(n / 1_000).toFixed(0)}K`
+         : `$${n.toFixed(0)}`;
+  };
+
+  const MTDTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const byKey = Object.fromEntries(payload.map(p => [p.dataKey, p.value]));
+    const rows = [
+      { label: "Total Revenue",     val: byKey.daily_revenue,   color: "#4B4B4B" },
+      { label: "MTD Trendline Cut", val: byKey.mtd_cumulative,  color: "#5a3a2e" },
+      { label: "Trending",          val: byKey.trending,        color: "#9ca3af" },
+      hasBudget && { label: "Goal MTD", val: byKey.goal_mtd,    color: "#c9a227" },
+    ].filter(Boolean);
+    return (
+      <div style={{
+        background: "#fff", border: "1px solid #E8E7E4",
+        padding: "8px 12px", fontSize: 11,
+        fontFamily: "'Josefin Sans', sans-serif",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>{fmtDate(label)}</div>
+        {rows.map(r => r.val != null && (
+          <div key={r.label} style={{ display: "flex", gap: 8, marginTop: 2, alignItems: "center" }}>
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, display: "inline-block", flexShrink: 0 }} />
+            <span style={{ color: "#888" }}>{r.label}:</span>
+            <span style={{ marginLeft: "auto", fontFamily: "monospace", fontWeight: 600 }}>{fmtDollar(r.val)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Legend — circle dots for lines, square for bars (matching reference style)
+  const legendItems = [
+    { shape: "circle", color: "#4B4B4B", label: "Total Revenue" },
+    { shape: "circle", color: "#5a3a2e", label: "Revenue MTD Trendline Cut" },
+    { shape: "circle", color: "#9ca3af", label: "Trending (Projected MTD by Day)" },
+    hasBudget && { shape: "circle", color: "#c9a227", label: "Goal MTD" },
+  ].filter(Boolean);
+
+  return (
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* Legend */}
+      <div style={{
+        display: "flex", flexWrap: "wrap", gap: "6px 14px",
+        padding: "0 8px 8px", justifyContent: "flex-start",
+      }}>
+        {legendItems.map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: "50%",
+              background: item.color, display: "inline-block", flexShrink: 0,
+            }} />
+            <span style={{
+              fontSize: 9, fontFamily: "'Josefin Sans', sans-serif",
+              letterSpacing: "0.08em", textTransform: "uppercase", color: "#555",
+            }}>
+              {item.label}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Chart */}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart
+            data={enriched}
+            margin={{ top: 8, right: 60, left: 0, bottom: 60 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="#E8E7E4" vertical={false} />
+            <XAxis
+              dataKey="day"
+              tickFormatter={fmtDate}
+              tick={{ fill: "#666", fontSize: 9, fontFamily: "'Josefin Sans', sans-serif" }}
+              angle={-45}
+              textAnchor="end"
+              interval={0}
+              height={60}
+            />
+
+            {/* Left axis — daily bar scale ($0.0M … $0.4M) */}
+            <YAxis
+              yAxisId="left"
+              tickFormatter={fmtLeft}
+              tick={{ fill: "#aaa", fontSize: 10 }}
+              width={52}
+            />
+
+            {/* Right axis — cumulative line scale (0M … 10M) */}
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              tickFormatter={fmtRight}
+              tick={{ fill: "#aaa", fontSize: 10 }}
+              width={40}
+            />
+
+            <Tooltip content={<MTDTooltip />} />
+
+            {/* Dark gray bars — Total Revenue (left axis) */}
+            <Bar
+              yAxisId="left"
+              dataKey="daily_revenue"
+              name="Total Revenue"
+              fill="#4B4B4B"
+              radius={[2, 2, 0, 0]}
+              opacity={0.9}
+              maxBarSize={24}
+            />
+
+            {/* Dark brown line — MTD Trendline Cut (right axis) */}
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="mtd_cumulative"
+              name="Revenue MTD Trendline Cut"
+              stroke="#5a3a2e"
+              strokeWidth={2}
+              dot={false}
+            />
+
+            {/* Light gray line — Trending projection (right axis) */}
+            <Line
+              yAxisId="right"
+              type="linear"
+              dataKey="trending"
+              name="Trending"
+              stroke="#9ca3af"
+              strokeWidth={1.5}
+              dot={false}
+              connectNulls
+            />
+
+            {/* Gold dashed line — Goal MTD (right axis) */}
+            {hasBudget && (
+              <Line
+                yAxisId="right"
+                type="linear"
+                dataKey="goal_mtd"
+                name="Goal MTD"
+                stroke="#c9a227"
+                strokeWidth={2}
+                strokeDasharray="5 3"
+                dot={false}
+              />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+
+// ── MTD Revenue vs Budget by Location ────────────────────────────────────────
+// Replicates the reference chart: grouped bars (Budget + MTD Sales) with three
+// overlay lines (Budget Line dashed gray, Sales Line solid mauve, Trending dashed green).
+//
+// Props:
+//   data – mtdSummary rows: [{ location, cash_sales, monthly_budget, trending }]
+export function MTDLocationChart({ data }) {
+  if (!data?.length) return <div className="empty-state">No MTD location data.</div>;
+
+  const fmtCurK = v => {
+    const n = Number(v);
+    if (isNaN(n)) return "$0k";
+    return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
+         : n >= 1_000     ? `$${Math.round(n / 1_000)}k`
+         : `$${Math.round(n)}`;
+  };
+
+  const LocationTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const order = ["monthly_budget", "cash_sales", "budget_line", "sales_line", "trending_line"];
+    const meta = {
+      monthly_budget: { label: "Budget",       color: "#C8C4BE" },
+      cash_sales:     { label: "MTD Sales",    color: "#A37B88" },
+      budget_line:    { label: "Budget Line",  color: "#aaa"    },
+      sales_line:     { label: "Sales Line",   color: "#7a4f5a" },
+      trending_line:  { label: "Trending",     color: "#3a7d44" },
     };
-  });
+    const sorted = [...payload].sort(
+      (a, b) => order.indexOf(a.dataKey) - order.indexOf(b.dataKey)
+    );
+    return (
+      <div style={{
+        background: "#fff", border: "1px solid #E8E7E4",
+        padding: "8px 12px", fontSize: 11,
+        fontFamily: "'Josefin Sans', sans-serif",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>{label}</div>
+        {sorted.map(p => {
+          const m = meta[p.dataKey];
+          if (!m || p.value == null) return null;
+          return (
+            <div key={p.dataKey} style={{ display: "flex", gap: 8, marginTop: 2, alignItems: "center" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: m.color, display: "inline-block", flexShrink: 0 }} />
+              <span style={{ color: "#888" }}>{m.label}:</span>
+              <span style={{ marginLeft: "auto", fontFamily: "monospace", fontWeight: 600 }}>{fmtCurK(p.value)}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
-  const fmtK = v => v == null ? "" : `$${(v / 1000).toFixed(0)}k`;
+  const enriched = data.map(row => ({
+    location:       row.location,
+    monthly_budget: Number(row.monthly_budget) || 0,
+    cash_sales:     Number(row.cash_sales)     || 0,
+    budget_line:    Number(row.monthly_budget) || 0,
+    sales_line:     Number(row.cash_sales)     || 0,
+    trending_line:  Number(row.trending)       || 0,
+  }));
 
   const legendItems = [
-    { color: "#A37B88", name: "Daily Sales (bars)" },
-    { color: "#A37B88", name: "MTD Cumulative", dashed: false, line: true },
-    { color: "#C8C4BE", name: "Budget Pace", dashed: true,  line: true },
-    { color: "#2E7D32", name: "Trending",     dashed: true,  line: true },
+    { type: "square", color: "#C8C4BE", name: "Budget" },
+    { type: "square", color: "#A37B88", name: "MTD Sales" },
+    { type: "line",   color: "#aaa",    name: "Budget Line",  dashed: true  },
+    { type: "line",   color: "#7a4f5a", name: "Sales Line",   dashed: false },
+    { type: "line",   color: "#3a7d44", name: "Trending",     dashed: true  },
   ];
 
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 14px", padding: "0 8px 6px", justifyContent: "center" }}>
+      <div style={{
+        display: "flex", flexWrap: "wrap", gap: "8px 16px",
+        padding: "0 8px 8px", justifyContent: "center",
+      }}>
         {legendItems.map((item, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            {item.line ? (
-              <svg width="18" height="8">
-                <line x1="0" y1="4" x2="18" y2="4"
+            {item.type === "line" ? (
+              <svg width="20" height="10" style={{ flexShrink: 0 }}>
+                <line x1="0" y1="5" x2="20" y2="5"
                   stroke={item.color} strokeWidth="2"
-                  strokeDasharray={item.dashed ? "4 3" : "none"} />
+                  strokeDasharray={item.dashed ? "5 3" : "0"} />
               </svg>
             ) : (
-              <span style={{ width: 10, height: 10, borderRadius: 2, background: item.color, display: "inline-block", opacity: 0.7 }} />
+              <span style={{
+                width: 10, height: 10, borderRadius: 2,
+                background: item.color, display: "inline-block", flexShrink: 0,
+              }} />
             )}
-            <span style={{ fontSize: 9, fontFamily: "'Josefin Sans', sans-serif", letterSpacing: "0.1em", textTransform: "uppercase", color: "#555" }}>
+            <span style={{
+              fontSize: 9, fontFamily: "'Josefin Sans', sans-serif",
+              letterSpacing: "0.1em", textTransform: "uppercase", color: "#555",
+            }}>
               {item.name}
             </span>
           </div>
@@ -304,47 +549,40 @@ export function MTDPerformanceChart({ data }) {
 
       <div style={{ flex: 1, minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+          <ComposedChart
+            data={enriched}
+            margin={{ top: 8, right: 16, left: 0, bottom: 60 }}
+            barCategoryGap="30%"
+            barGap={2}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="#E8E7E4" vertical={false} />
             <XAxis
-              dataKey="day"
-              tick={{ fill: "#aaa", fontSize: 10, fontFamily: "'Josefin Sans', sans-serif" }}
-              tickFormatter={d => (d % 5 === 1 || d === days_in_month) ? d : ""}
+              dataKey="location"
+              tick={{ fill: "#666", fontSize: 9, fontFamily: "'Josefin Sans', sans-serif" }}
+              angle={-45}
+              textAnchor="end"
+              interval={0}
+              height={60}
             />
             <YAxis
-              yAxisId="left"
-              tickFormatter={fmtK}
+              tickFormatter={fmtCurK}
               tick={{ fill: "#aaa", fontSize: 10 }}
-              width={52}
+              width={50}
             />
-            <YAxis
-              yAxisId="right"
-              orientation="right"
-              tickFormatter={fmtK}
-              tick={{ fill: "#aaa", fontSize: 10 }}
-              width={52}
-            />
-            <Tooltip
-              content={({ active, payload, label }) => {
-                if (!active || !payload?.length) return null;
-                return (
-                  <div style={{ background: "#fff", border: "1px solid #E8E7E4", padding: "8px 12px", fontSize: 11, fontFamily: "'Josefin Sans', sans-serif", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}>
-                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Day {label}</div>
-                    {payload.map(p => p.value != null && (
-                      <div key={p.dataKey} style={{ display: "flex", gap: 8, marginTop: 2, alignItems: "center" }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 2, background: p.fill || p.stroke, display: "inline-block" }} />
-                        <span style={{ color: "#888" }}>{p.name}:</span>
-                        <span style={{ marginLeft: "auto", fontFamily: "monospace", fontWeight: 600 }}>{fmt.currency(p.value)}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              }}
-            />
-            <Bar yAxisId="left" dataKey="daily_sales" name="Daily Sales" fill="#A37B88" opacity={0.65} radius={[2, 2, 0, 0]} />
-            <Line yAxisId="right" type="monotone" dataKey="cumulative_sales"  name="MTD Cumulative" stroke="#A37B88" strokeWidth={2}   dot={false} connectNulls={false} />
-            <Line yAxisId="right" type="monotone" dataKey="budget_pace"       name="Budget Pace"    stroke="#C8C4BE" strokeWidth={1.5} dot={false} strokeDasharray="4 3" />
-            <Line yAxisId="right" type="monotone" dataKey="trend_projection"  name="Trending"       stroke="#2E7D32" strokeWidth={1.5} dot={false} strokeDasharray="6 4" connectNulls={false} />
+            <Tooltip content={<LocationTooltip />} />
+
+            <Bar dataKey="monthly_budget" name="Budget"    fill="#C8C4BE" radius={[2, 2, 0, 0]} opacity={0.9} />
+            <Bar dataKey="cash_sales"     name="MTD Sales" fill="#A37B88" radius={[2, 2, 0, 0]} opacity={0.9} />
+
+            <Line type="monotone" dataKey="budget_line"   name="Budget Line"
+              stroke="#aaa"    strokeWidth={1.5} strokeDasharray="5 3"
+              dot={{ r: 3, fill: "#aaa",    strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls />
+            <Line type="monotone" dataKey="sales_line"    name="Sales Line"
+              stroke="#7a4f5a" strokeWidth={2}
+              dot={{ r: 3, fill: "#7a4f5a", strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls />
+            <Line type="monotone" dataKey="trending_line" name="Trending"
+              stroke="#3a7d44" strokeWidth={2} strokeDasharray="6 3"
+              dot={{ r: 4, fill: "#3a7d44", strokeWidth: 0 }} activeDot={{ r: 6 }} connectNulls />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

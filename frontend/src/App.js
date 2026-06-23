@@ -7,7 +7,7 @@ import SalesMixTable from "./components/SalesMixTable";
 import MTDSummaryTable from "./components/MTDSummaryTable";
 import MonthlyTrendTable from "./components/MonthlyTrendTable";
 import OperationsTable from "./components/OperationsTable";
-import { RevenueTrendChart, LocationBarChart, MTDPerformanceChart } from "./components/RevenueTrendChart";
+import { RevenueTrendChart, LocationBarChart, MTDPerformanceChart, MTDLocationChart } from "./components/RevenueTrendChart";
 import CategoryBreakdown from "./components/CategoryBreakdown";
 import EmployeeUtilTable from "./components/EmployeeUtilTable";
 import EmployeeRphTable from "./components/EmployeeRphTable";
@@ -233,23 +233,10 @@ export default function App() {
             <div className="chart-row">
               <div className="chart-box">
                 <div className="chart-title">
-                  MTD Revenue vs Budget by Location
+                  MTD Revenue Trend
                 </div>
                 <div className="chart-inner">
-                  <LocationBarChart
-                    data={dash.mtdSummary}
-                    xKey="location"
-                    yKey="cash_sales"
-                    label="MTD Sales"
-                    yType="cur"
-                    secondaryKey="monthly_budget"
-                    secondaryLabel="Budget"
-                    lines={[
-                      { dataKey: "monthly_budget", name: "Budget Line",   color: "#C8C4BE", dashed: true  },
-                      { dataKey: "cash_sales",     name: "Sales Line",    color: "#A37B88", dashed: false },
-                      { dataKey: "trending",       name: "Trending",      color: "#2E7D32", dashed: true  },
-                    ]}
-                  />
+                  <MTDPerformanceChart data={dash.mtdDailyTrend} />
                 </div>
               </div>
               <div className="chart-box">
