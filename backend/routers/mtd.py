@@ -74,6 +74,7 @@ def get_mtd_kpi_header(
         s = start_date or str(e_dt_tmp.replace(day=1))
 
         where, params = build_date_filter(s, e, locations, date_col="payment_date")
+        where_sales, params_sales = build_date_filter(s, e, locations, date_col="sale_date")
         e_dt      = datetime.strptime(e, "%Y-%m-%d").date()
         s_dt      = datetime.strptime(s, "%Y-%m-%d").date()
         yesterday = str(e_dt - timedelta(days=1))
@@ -164,7 +165,7 @@ def get_mtd_kpi_header(
             GROUP BY job_name
         ),
         provider_rev AS (
-            -- Pre-aggregate schedule and cash sales to (center, employee, day) grain
+            -- Pre-aggregate schedule and accrual sales to (center, employee, day) grain
             -- before joining to avoid fan-out multiplying booked_hours per sales row.
             SELECT
                 SUM(CASE WHEN sch.job_name = 'Treatment Provider' THEN COALESCE(sa.daily_revenue, 0) ELSE 0 END) * 1.0
@@ -187,15 +188,15 @@ def get_mtd_kpi_header(
             LEFT JOIN (
                 SELECT
                     center_name,
-                    sold_by,
-                    CAST(payment_date AS DATE) AS payment_date,
-                    SUM(sales_collected_exc_tax) AS daily_revenue
-                FROM {FULL_CASH}
-                {where}
-                GROUP BY center_name, sold_by, CAST(payment_date AS DATE)
+                    serviced_by,
+                    CAST(sale_date AS DATE) AS sale_date,
+                    SUM(sales_exc_tax) AS daily_revenue
+                FROM {FULL_SALES}
+                {where_sales}
+                GROUP BY center_name, serviced_by, CAST(sale_date AS DATE)
             ) sa
-              ON sa.sold_by     = sch.employee_name
-             AND sa.payment_date = sch.work_date
+              ON sa.serviced_by  = sch.employee_name
+             AND sa.sale_date    = sch.work_date
              AND sa.center_name  = sch.center_name
         ),
         rebooking AS (
@@ -242,8 +243,8 @@ def get_mtd_kpi_header(
         """
         # params order: guest_classification where, mtd where, yesterday_data y_loc,
         # last_month_data y_loc, prior_year y_loc, sched_block (provider_rev sch),
-        # where (provider_rev cash), appt_loc
-        all_params = merge_params(params, params, y_loc_p, y_loc_p, y_loc_p, sched_x, params, appt_loc_p)
+        # where_sales (provider_rev accrual sales), appt_loc
+        all_params = merge_params(params, params, y_loc_p, y_loc_p, y_loc_p, sched_x, params_sales, appt_loc_p)
         rows = run_query(sql, all_params or None)
         return rows[0] if rows else {}
 
